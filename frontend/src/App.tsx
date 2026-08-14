@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 type Screen =
   | "home"
@@ -27,6 +27,58 @@ type AgentResponse = {
   nextDifficulty: Difficulty;
   recommendation: string;
   agentDecision: string;
+  nextTopic?: string;
+  action?: string;
+  progress?: {
+    totalAttempts: number;
+    correctAnswers: number;
+    accuracy: number;
+    currentStreak: number;
+    bestStreak: number;
+    skillLevel: string;
+    currentDifficulty: Difficulty;
+    weakTopics: string[];
+    strongTopics: string[];
+  };
+};
+
+type StudentProgress = {
+  id: string;
+  total_attempts: number;
+  correct_answers: number;
+  accuracy: number;
+  current_streak: number;
+  best_streak: number;
+  skill_level: string;
+  current_difficulty: Difficulty;
+  last_recommendation: string;
+  created_at: string;
+  updated_at: string;
+};
+
+type ProgressData = {
+  success: boolean;
+  student: StudentProgress;
+  attempts: Array<{
+    id: number;
+    student_id: string;
+    question: string;
+    topic: string;
+    difficulty: Difficulty;
+    student_answer: string;
+    correct_answer: string;
+    correct: number;
+    recommendation: string;
+    next_topic: string;
+    created_at: string;
+  }>;
+  topics: Array<{
+    student_id: string;
+    topic: string;
+    attempts: number;
+    correct: number;
+    accuracy: number;
+  }>;
 };
 
 const diagnosticQuestions: Question[] = [
@@ -124,6 +176,24 @@ function App() {
 
   const [name, setName] = useState("");
 
+  const [studentId] = useState(() => {
+    const saved = localStorage.getItem("acelearn_student_id");
+    if (saved) return saved;
+
+    const id = `student-${crypto.randomUUID()}`;
+    localStorage.setItem("acelearn_student_id", id);
+    return id;
+  });
+
+  const [progressData, setProgressData] =
+    useState<ProgressData | null>(null);
+
+  const [progressLoading, setProgressLoading] =
+    useState(false);
+
+  const [progressError, setProgressError] =
+    useState("");
+
   const [currentQuestion, setCurrentQuestion] =
     useState(0);
 
@@ -153,6 +223,69 @@ function App() {
 
   const [sessionHistory, setSessionHistory] =
     useState<string[]>([]);
+
+  // ================================
+  // LOAD REAL STUDENT PROGRESS
+  // ================================
+
+  async function loadProgress() {
+    setProgressLoading(true);
+    setProgressError("");
+
+    try {
+      const response = await fetch(
+        `/api/students/${studentId}/progress`
+      );
+
+      if (response.status === 404) {
+        setProgressData(null);
+        return;
+      }
+
+      if (!response.ok) {
+        throw new Error(
+          `Backend returned ${response.status}`
+        );
+      }
+
+      const data: ProgressData =
+        await response.json();
+
+      if (!data.success) {
+        throw new Error(
+          "Invalid progress response."
+        );
+      }
+
+      setProgressData(data);
+    } catch (error) {
+      console.error(
+        "AceLearn progress error:",
+        error
+      );
+      setProgressError(
+        "Progress load nahi ho pa raha. Backend check karo."
+      );
+    } finally {
+      setProgressLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    const savedName = localStorage.getItem(
+      "acelearn_student_name"
+    );
+    if (savedName) setName(savedName);
+  }, []);
+
+  useEffect(() => {
+    if (
+      screen === "dashboard" ||
+      screen === "results"
+    ) {
+      void loadProgress();
+    }
+  }, [screen, studentId]);
 
   // ================================
   // START ASSESSMENT
@@ -237,6 +370,7 @@ function App() {
           },
 
           body: JSON.stringify({
+            studentId,
             question: question.question,
 
             options: question.options,
@@ -294,6 +428,9 @@ AI decision: ${agent.agentDecision}`,
           (score) => score + 1
         );
       }
+
+      // Refresh persistent SQLite progress after every answer.
+      void loadProgress();
     } catch (error) {
       console.error(
         "AceLearn AI Agent Error:",
@@ -757,9 +894,14 @@ AI decision: ${agent.agentDecision}`,
               type="text"
               placeholder="Enter your name"
               value={name}
-              onChange={(e) =>
-                setName(e.target.value)
-              }
+              onChange={(e) => {
+                const value = e.target.value;
+                setName(value);
+                localStorage.setItem(
+                  "acelearn_student_name",
+                  value
+                );
+              }}
             />
 
             <label>
@@ -1270,7 +1412,7 @@ AI decision: ${agent.agentDecision}`,
               <div>
 
                 <strong>
-                  3 day streak
+                  {progressData?.student.current_streak ?? 0} day streak
                 </strong>
 
                 <small>
@@ -1281,6 +1423,40 @@ AI decision: ${agent.agentDecision}`,
 
             </div>
 
+          </div>
+
+          <div className="dashboard-grid">
+            <section className="dashboard-card">
+              <div className="card-heading">
+                <div>
+                  <small>LEARNING STATS</small>
+                  <h2>Real-time progress</h2>
+                </div>
+              </div>
+              {progressLoading ? (
+                <p>Loading your progress...</p>
+              ) : progressError ? (
+                <p>{progressError}</p>
+              ) : (
+                <div className="plan-grid">
+                  <div className="plan-day">
+                    <small>ACCURACY</small>
+                    <strong>{progressData?.student.accuracy ?? 0}%</strong>
+                    <span>{progressData?.student.total_attempts ?? 0} attempts</span>
+                  </div>
+                  <div className="plan-day">
+                    <small>STREAK</small>
+                    <strong>🔥 {progressData?.student.current_streak ?? 0}</strong>
+                    <span>Best: {progressData?.student.best_streak ?? 0}</span>
+                  </div>
+                  <div className="plan-day">
+                    <small>LEVEL</small>
+                    <strong>{progressData?.student.skill_level || "Beginner"}</strong>
+                    <span>{progressData?.student.current_difficulty || "easy"} difficulty</span>
+                  </div>
+                </div>
+              )}
+            </section>
           </div>
 
           <section className="agent-decision">
@@ -1309,18 +1485,14 @@ AI decision: ${agent.agentDecision}`,
               </h2>
 
               <p>
-                Your diagnostic shows that
-                Algebra needs more attention.
-                I've moved Algebra fundamentals
-                to today's session and will
-                increase difficulty as your
-                accuracy improves.
+                {progressData?.student.last_recommendation ||
+                  "Complete a practice question and I'll analyze your performance to build your personalized plan."}
               </p>
 
               <div className="decision-tags">
 
                 <span>
-                  🎯 Algebra Priority
+                  🎯 {progressData?.topics?.[0]?.topic || "Personalized Priority"}
                 </span>
 
                 <span>
@@ -1350,8 +1522,9 @@ AI decision: ${agent.agentDecision}`,
                   </small>
 
                   <h2>
-                    Build your Algebra
-                    foundation
+                    {progressData?.topics?.[0]?.topic
+                      ? `Build your ${progressData.topics[0].topic} foundation`
+                      : "Build your learning foundation"}
                   </h2>
 
                 </div>
@@ -1363,9 +1536,8 @@ AI decision: ${agent.agentDecision}`,
               </div>
 
               <p className="mission-description">
-                We'll review linear equations
-                and then gradually increase the
-                difficulty based on your answers.
+                {progressData?.student.last_recommendation ||
+                  "Start a practice session and your AI Agent will decide what you should practice next."}
               </p>
 
               <div className="mission-steps">
@@ -1460,94 +1632,62 @@ AI decision: ${agent.agentDecision}`,
               </div>
 
               <div className="dashboard-skill">
-
                 <div>
-
-                  <span>
-                    Math
-                  </span>
-
+                  <span>Overall</span>
                   <strong>
-                    72%
+                    {progressData?.student.accuracy ?? 0}%
                   </strong>
-
                 </div>
 
                 <div className="dashboard-progress">
-
                   <span
                     style={{
-                      width: "72%",
+                      width: `${Math.min(
+                        progressData?.student.accuracy ?? 0,
+                        100
+                      )}%`,
                     }}
                   />
-
                 </div>
 
                 <small>
-                  Needs practice
+                  {progressData?.student.skill_level || "No data yet"}
                 </small>
-
               </div>
 
-              <div className="dashboard-skill">
+              {progressData?.topics?.length ? (
+                progressData.topics.slice(0, 3).map((topic) => (
+                  <div
+                    className="dashboard-skill"
+                    key={topic.topic}
+                  >
+                    <div>
+                      <span>{topic.topic}</span>
+                      <strong>{Math.round(topic.accuracy)}%</strong>
+                    </div>
 
-                <div>
+                    <div className="dashboard-progress">
+                      <span
+                        style={{
+                          width: `${Math.min(topic.accuracy, 100)}%`,
+                        }}
+                      />
+                    </div>
 
-                  <span>
-                    Reading
-                  </span>
-
-                  <strong>
-                    61%
-                  </strong>
-
-                </div>
-
-                <div className="dashboard-progress">
-
-                  <span
-                    style={{
-                      width: "61%",
-                    }}
-                  />
-
-                </div>
-
-                <small>
-                  Improving
-                </small>
-
-              </div>
-
-              <div className="dashboard-skill">
-
-                <div>
-
-                  <span>
-                    Writing
-                  </span>
-
-                  <strong>
-                    84%
-                  </strong>
-
-                </div>
-
-                <div className="dashboard-progress">
-
-                  <span
-                    style={{
-                      width: "84%",
-                    }}
-                  />
-
-                </div>
-
-                <small>
-                  Strong
-                </small>
-
-              </div>
+                    <small>
+                      {topic.accuracy < 60
+                        ? "Needs practice"
+                        : topic.accuracy < 80
+                        ? "Improving"
+                        : "Strong"}
+                    </small>
+                  </div>
+                ))
+              ) : (
+                <p>
+                  Complete your first practice question to see topic-level progress.
+                </p>
+              )}
 
             </section>
 
