@@ -7,7 +7,8 @@ type Screen =
   | "analysis"
   | "dashboard"
   | "session"
-  | "results";
+  | "results"
+  | "chat";
 
 type Difficulty = "easy" | "medium" | "hard";
 
@@ -223,6 +224,112 @@ function App() {
 
   const [sessionHistory, setSessionHistory] =
     useState<string[]>([]);
+
+  // ================================
+  // UNIVERSAL AI CHAT
+  // ================================
+  type ChatMessage = {
+    id: string;
+    role: "user" | "assistant";
+    content: string;
+  };
+
+  const [chatMessages, setChatMessages] =
+    useState<ChatMessage[]>(() => {
+      try {
+        const saved = localStorage.getItem(
+          "acelearn_chat_messages"
+        );
+        return saved ? JSON.parse(saved) : [];
+      } catch {
+        return [];
+      }
+    });
+
+  const [chatInput, setChatInput] = useState("");
+  const [chatLoading, setChatLoading] = useState(false);
+  const [chatError, setChatError] = useState("");
+
+  useEffect(() => {
+    localStorage.setItem(
+      "acelearn_chat_messages",
+      JSON.stringify(chatMessages)
+    );
+  }, [chatMessages]);
+
+  async function sendChatMessage() {
+    const message = chatInput.trim();
+
+    if (!message || chatLoading) return;
+
+    setChatMessages((previous) => [
+      ...previous,
+      {
+        id: crypto.randomUUID(),
+        role: "user",
+        content: message,
+      },
+    ]);
+
+    setChatInput("");
+    setChatLoading(true);
+    setChatError("");
+
+    try {
+      const response = await fetch("/api/chat", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          studentId,
+          message,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(
+          `Backend returned ${response.status}`
+        );
+      }
+
+      const data = await response.json();
+
+      if (!data.success || !data.answer) {
+        throw new Error(
+          "Invalid AI chat response."
+        );
+      }
+
+      setChatMessages((previous) => [
+        ...previous,
+        {
+          id: crypto.randomUUID(),
+          role: "assistant",
+          content: data.answer,
+        },
+      ]);
+    } catch (error) {
+      console.error(
+        "AceLearn chat error:",
+        error
+      );
+
+      setChatError(
+        "AI Chat se connection nahi ho pa raha. Backend port 3001 check karo."
+      );
+    } finally {
+      setChatLoading(false);
+    }
+  }
+
+  function clearChat() {
+    setChatMessages([]);
+    setChatError("");
+    localStorage.removeItem(
+      "acelearn_chat_messages"
+    );
+  }
 
   // ================================
   // LOAD REAL STUDENT PROGRESS
@@ -513,6 +620,15 @@ AI decision: ${agent.agentDecision}`,
             <a href="#impact">
               Impact
             </a>
+
+            <button
+              className="nav-btn"
+              onClick={() =>
+                setScreen("chat")
+              }
+            >
+              AI Chat
+            </button>
 
             <button
               className="nav-btn"
@@ -2137,6 +2253,291 @@ AI decision: ${agent.agentDecision}`,
 
         </main>
 
+      </div>
+    );
+  }
+
+  // ================================
+  // UNIVERSAL AI CHAT
+  // ================================
+
+  if (screen === "chat") {
+    return (
+      <div
+        className="app"
+        style={{
+          minHeight: "100vh",
+          display: "flex",
+          flexDirection: "column",
+        }}
+      >
+        <nav className="navbar">
+          <div className="logo">
+            <span className="logo-icon">✦</span>
+            AceLearn AI
+          </div>
+
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "10px",
+            }}
+          >
+            <button
+              className="secondary-btn"
+              onClick={clearChat}
+              disabled={
+                chatLoading ||
+                chatMessages.length === 0
+              }
+            >
+              Clear Chat
+            </button>
+
+            <button
+              className="back-btn"
+              onClick={() => setScreen("home")}
+            >
+              ← Back
+            </button>
+          </div>
+        </nav>
+
+        <main
+          style={{
+            width: "100%",
+            maxWidth: "1000px",
+            margin: "0 auto",
+            padding: "32px 20px",
+            boxSizing: "border-box",
+            display: "flex",
+            flexDirection: "column",
+            flex: 1,
+          }}
+        >
+          <div style={{ marginBottom: "24px" }}>
+            <p className="eyebrow">
+              ACELEARN AI CHAT
+            </p>
+
+            <h1 style={{ marginBottom: "8px" }}>
+              Ask me anything.
+            </h1>
+
+            <p>
+              Ask questions about Math, Physics,
+              Chemistry, Biology, coding, exams,
+              concepts, homework, or study planning.
+            </p>
+          </div>
+
+          <div
+            style={{
+              minHeight: "420px",
+              maxHeight: "58vh",
+              overflowY: "auto",
+              padding: "20px",
+              borderRadius: "24px",
+              background: "rgba(255,255,255,0.72)",
+              border: "1px solid rgba(0,0,0,0.08)",
+              boxShadow:
+                "0 16px 45px rgba(0,0,0,0.06)",
+              display: "flex",
+              flexDirection: "column",
+              gap: "14px",
+            }}
+          >
+            {chatMessages.length === 0 && (
+              <div
+                style={{
+                  margin: "auto",
+                  textAlign: "center",
+                  maxWidth: "620px",
+                  padding: "30px 10px",
+                }}
+              >
+                <div
+                  style={{
+                    fontSize: "42px",
+                    marginBottom: "12px",
+                  }}
+                >
+                  ✦
+                </div>
+
+                <h2>Your AI Study Assistant</h2>
+
+                <p>Try asking:</p>
+
+                <div
+                  style={{
+                    display: "grid",
+                    gap: "8px",
+                    marginTop: "16px",
+                  }}
+                >
+                  {[
+                    "Explain Newton's laws in simple language.",
+                    "Solve 2x + 5 = 17 step by step.",
+                    "What is photosynthesis?",
+                    "Make me a 7-day JEE study plan.",
+                  ].map((suggestion) => (
+                    <button
+                      key={suggestion}
+                      className="secondary-btn"
+                      onClick={() =>
+                        setChatInput(suggestion)
+                      }
+                      style={{
+                        textAlign: "left",
+                        width: "100%",
+                      }}
+                    >
+                      {suggestion}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {chatMessages.map((message) => (
+              <div
+                key={message.id}
+                style={{
+                  display: "flex",
+                  justifyContent:
+                    message.role === "user"
+                      ? "flex-end"
+                      : "flex-start",
+                }}
+              >
+                <div
+                  style={{
+                    maxWidth: "78%",
+                    padding: "14px 16px",
+                    borderRadius:
+                      message.role === "user"
+                        ? "18px 18px 4px 18px"
+                        : "18px 18px 18px 4px",
+                    background:
+                      message.role === "user"
+                        ? "#111827"
+                        : "rgba(0,0,0,0.05)",
+                    color:
+                      message.role === "user"
+                        ? "#fff"
+                        : "inherit",
+                    whiteSpace: "pre-wrap",
+                    lineHeight: 1.6,
+                    overflowWrap: "anywhere",
+                  }}
+                >
+                  <small
+                    style={{
+                      display: "block",
+                      opacity: 0.65,
+                      marginBottom: "5px",
+                      fontWeight: 700,
+                    }}
+                  >
+                    {message.role === "user"
+                      ? "YOU"
+                      : "ACELEARN AI"}
+                  </small>
+
+                  {message.content}
+                </div>
+              </div>
+            ))}
+
+            {chatLoading && (
+              <div
+                style={{
+                  padding: "14px 16px",
+                  borderRadius:
+                    "18px 18px 18px 4px",
+                  background:
+                    "rgba(0,0,0,0.05)",
+                  alignSelf: "flex-start",
+                }}
+              >
+                <strong>
+                  AceLearn AI is thinking...
+                </strong>
+              </div>
+            )}
+
+            {chatError && (
+              <div
+                style={{
+                  padding: "12px 14px",
+                  borderRadius: "12px",
+                  background:
+                    "rgba(220,38,38,0.08)",
+                  color: "#b91c1c",
+                }}
+              >
+                {chatError}
+              </div>
+            )}
+          </div>
+
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              void sendChatMessage();
+            }}
+            style={{
+              display: "flex",
+              gap: "10px",
+              marginTop: "16px",
+            }}
+          >
+            <input
+              value={chatInput}
+              onChange={(event) =>
+                setChatInput(event.target.value)
+              }
+              placeholder="Ask AceLearn AI anything..."
+              disabled={chatLoading}
+              style={{
+                flex: 1,
+                minWidth: 0,
+                padding: "15px 17px",
+                borderRadius: "16px",
+                border:
+                  "1px solid rgba(0,0,0,0.14)",
+                outline: "none",
+                fontSize: "16px",
+                background: "#fff",
+              }}
+            />
+
+            <button
+              className="primary-btn"
+              type="submit"
+              disabled={
+                chatLoading ||
+                !chatInput.trim()
+              }
+            >
+              {chatLoading ? "..." : "Send →"}
+            </button>
+          </form>
+
+          <p
+            style={{
+              textAlign: "center",
+              fontSize: "12px",
+              opacity: 0.55,
+              marginTop: "10px",
+            }}
+          >
+            AI can make mistakes. Verify important
+            academic information.
+          </p>
+        </main>
       </div>
     );
   }

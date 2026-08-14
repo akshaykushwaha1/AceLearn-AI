@@ -449,6 +449,233 @@ Rules:
       },
     );
 
+        // --------------------------------------------------
+    // UNIVERSAL AI CHAT
+    // --------------------------------------------------
+
+    app.post("/api/chat", async (request, reply) => {
+      try {
+        const body = request.body as {
+          studentId?: string;
+          message: string;
+        };
+
+        const studentId =
+          body.studentId || "demo-student";
+
+        const message =
+          body.message?.trim();
+
+        if (!message) {
+          return reply.code(400).send({
+            success: false,
+            error: "Message is required.",
+          });
+        }
+
+        // ------------------------------------------
+        // Get student learning context
+        // ------------------------------------------
+
+        const student = db
+          .prepare(
+            `
+            SELECT
+              id,
+              total_attempts,
+              correct_answers,
+              accuracy,
+              current_streak,
+              best_streak,
+              skill_level,
+              current_difficulty,
+              last_recommendation
+            FROM students
+            WHERE id = ?
+            `,
+          )
+          .get(studentId) as
+          | {
+              id: string;
+              total_attempts: number;
+              correct_answers: number;
+              accuracy: number;
+              current_streak: number;
+              best_streak: number;
+              skill_level: string;
+              current_difficulty: string;
+              last_recommendation: string;
+            }
+          | undefined;
+
+        const topics = db
+          .prepare(
+            `
+            SELECT
+              topic,
+              attempts,
+              correct,
+              accuracy
+            FROM topic_progress
+            WHERE student_id = ?
+            ORDER BY accuracy ASC
+            `,
+          )
+          .all(studentId) as {
+            topic: string;
+            attempts: number;
+            correct: number;
+            accuracy: number;
+          }[];
+
+        // ------------------------------------------
+        // Build student context
+        // ------------------------------------------
+
+        const studentContext = student
+          ? `
+Student learning profile:
+
+Student ID: ${student.id}
+Total attempts: ${student.total_attempts}
+Correct answers: ${student.correct_answers}
+Accuracy: ${student.accuracy}%
+Current streak: ${student.current_streak}
+Best streak: ${student.best_streak}
+Skill level: ${student.skill_level}
+Current difficulty: ${student.current_difficulty}
+Last recommendation: ${student.last_recommendation}
+
+Topic performance:
+${topics.length
+  ? topics
+      .map(
+        (topic) =>
+          `- ${topic.topic}: ${topic.accuracy}% accuracy (${topic.correct}/${topic.attempts})`,
+      )
+      .join("\n")
+  : "No topic performance available yet."}
+`
+          : `
+No saved student profile is available yet.
+Treat this as a new learner.
+`;
+
+        // ------------------------------------------
+        // Universal AI prompt
+        // ------------------------------------------
+
+        const prompt = `
+You are AceLearn AI, an intelligent educational AI agent.
+
+You are NOT limited to one subject.
+
+You can help students with:
+- Mathematics
+- Physics
+- Chemistry
+- Biology
+- Computer Science
+- English
+- General academic questions
+- School subjects
+- Exam preparation
+- JEE preparation
+- NEET preparation
+- SAT preparation
+- UPSC preparation
+- Study planning
+- Concept explanations
+- Problem solving
+- Revision
+- Practice questions
+
+The student can ask questions in natural language.
+
+Your job is to understand what the student wants and provide
+the most useful answer.
+
+IMPORTANT BEHAVIOR:
+
+1. Answer the student's actual question.
+2. Explain concepts clearly and step-by-step when useful.
+3. Adapt the explanation to the student's skill level.
+4. Do not unnecessarily make answers complicated.
+5. If the student asks a mathematical or scientific question,
+   solve it carefully and show the important steps.
+6. If the student asks for study advice, make it practical.
+7. If the student appears confused, explain the concept differently.
+8. Encourage learning without giving empty praise.
+9. Never shame the student for making mistakes.
+10. If you are uncertain about something, say so instead of
+    inventing facts.
+11. Do not claim that you performed an action that you did not perform.
+12. For questions outside academics, you may still answer helpfully,
+    but keep the educational context in mind.
+13. Keep the response readable with headings, bullets or steps
+    when appropriate.
+
+${studentContext}
+
+Student's message:
+
+${message}
+
+Now answer the student directly.
+`;
+
+        // ------------------------------------------
+        // Groq
+        // ------------------------------------------
+
+        const completion =
+          await groq.chat.completions.create({
+            model: "openai/gpt-oss-20b",
+
+            messages: [
+              {
+                role: "system",
+                content:
+                  "You are AceLearn AI, a helpful and careful educational AI agent.",
+              },
+              {
+                role: "user",
+                content: prompt,
+              },
+            ],
+
+            temperature: 0.4,
+          });
+
+        const answer =
+          completion.choices[0]?.message?.content;
+
+        if (!answer) {
+          return reply.code(500).send({
+            success: false,
+            error: "AI returned an empty response.",
+          });
+        }
+
+        return {
+          success: true,
+          studentId,
+          answer,
+        };
+      } catch (error) {
+        console.error(
+          "❌ Chat error:",
+          error,
+        );
+
+        return reply.code(500).send({
+          success: false,
+          error:
+            "AI Chat failed to process the message.",
+        });
+      }
+    });
+
     // --------------------------------------------------
     // GET STUDENT PROGRESS
     // --------------------------------------------------
