@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 type Screen =
   | "home"
@@ -7,28 +7,33 @@ type Screen =
   | "analysis"
   | "dashboard"
   | "session"
-  | "results"
-  | "chat";
+  | "chat"
+  | "results";
 
 type Difficulty = "easy" | "medium" | "hard";
 
 type Question = {
   subject: string;
+  level: string;
   topic: string;
   difficulty: Difficulty;
   question: string;
   options: string[];
-  answer: string;
+  correctAnswer: string;
+  explanation: string;
 };
 
 type AgentResponse = {
   correct: boolean;
   skillLevel: string;
   feedback: string;
+  correctAnswer?: string;
+  explanation?: string;
+  mistake?: string;
   nextDifficulty: Difficulty;
   recommendation: string;
-  agentDecision: string;
   nextTopic?: string;
+  agentDecision: string;
   action?: string;
   progress?: {
     totalAttempts: number;
@@ -37,458 +42,331 @@ type AgentResponse = {
     currentStreak: number;
     bestStreak: number;
     skillLevel: string;
-    currentDifficulty: Difficulty;
+    currentDifficulty: string;
     weakTopics: string[];
     strongTopics: string[];
   };
 };
 
-type StudentProgress = {
-  id: string;
-  total_attempts: number;
-  correct_answers: number;
-  accuracy: number;
-  current_streak: number;
-  best_streak: number;
-  skill_level: string;
-  current_difficulty: Difficulty;
-  last_recommendation: string;
-  created_at: string;
-  updated_at: string;
+type ChatMessage = {
+  role: "user" | "assistant";
+  content: string;
 };
 
-type ProgressData = {
-  success: boolean;
-  student: StudentProgress;
-  attempts: Array<{
-    id: number;
-    student_id: string;
-    question: string;
-    topic: string;
-    difficulty: Difficulty;
-    student_answer: string;
-    correct_answer: string;
-    correct: number;
-    recommendation: string;
-    next_topic: string;
-    created_at: string;
-  }>;
-  topics: Array<{
-    student_id: string;
-    topic: string;
-    attempts: number;
-    correct: number;
-    accuracy: number;
-  }>;
-};
+const API_BASE = "/api";
 
-const diagnosticQuestions: Question[] = [
-  {
-    subject: "Math",
-    topic: "Algebra",
-    difficulty: "easy",
-    question: "If 2x + 6 = 18, what is the value of x?",
-    options: ["4", "6", "8", "12"],
-    answer: "6",
-  },
-  {
-    subject: "Math",
-    topic: "Functions",
-    difficulty: "medium",
-    question: "If f(x) = 2x + 3, what is f(4)?",
-    options: ["7", "9", "11", "12"],
-    answer: "11",
-  },
-  {
-    subject: "Reading",
-    topic: "Main Idea",
-    difficulty: "easy",
-    question:
-      "A passage explains how regular exercise can improve memory and concentration. What is the main idea?",
-    options: [
-      "Exercise is only useful for athletes.",
-      "Exercise can support brain function and learning.",
-      "Memory cannot be improved.",
-      "Students should avoid physical activity.",
-    ],
-    answer:
-      "Exercise can support brain function and learning.",
-  },
-  {
-    subject: "Writing",
-    topic: "Grammar",
-    difficulty: "easy",
-    question:
-      "Which sentence is grammatically correct?",
-    options: [
-      "She don't like mathematics.",
-      "She doesn't likes mathematics.",
-      "She doesn't like mathematics.",
-      "She not like mathematics.",
-    ],
-    answer: "She doesn't like mathematics.",
-  },
-  {
-    subject: "Math",
-    topic: "Geometry",
-    difficulty: "medium",
-    question:
-      "A triangle has angles of 50° and 60°. What is the measure of the third angle?",
-    options: ["60°", "70°", "80°", "90°"],
-    answer: "70°",
-  },
-];
+const STUDENT_ID_KEY = "acelearn_student_id";
 
-const adaptiveQuestions: Question[] = [
-  {
-    subject: "Math",
-    topic: "Linear Equations",
-    difficulty: "easy",
-    question: "If 2x + 4 = 12, what is x?",
-    options: ["2", "4", "6", "8"],
-    answer: "4",
-  },
-  {
-    subject: "Math",
-    topic: "Algebra",
-    difficulty: "medium",
-    question: "If 3x - 7 = 14, what is x?",
-    options: ["5", "6", "7", "8"],
-    answer: "7",
-  },
-  {
-    subject: "Math",
-    topic: "Quadratic Equations",
-    difficulty: "hard",
-    question:
-      "If x² - 5x + 6 = 0, which values of x satisfy the equation?",
-    options: [
-      "1 and 6",
-      "2 and 3",
-      "3 and 4",
-      "2 and 4",
-    ],
-    answer: "2 and 3",
-  },
-];
+function getStudentId() {
+  const existing = localStorage.getItem(STUDENT_ID_KEY);
+
+  if (existing) {
+    return existing;
+  }
+
+  const id = `student-${crypto.randomUUID()}`;
+  localStorage.setItem(STUDENT_ID_KEY, id);
+
+  return id;
+}
 
 function App() {
   const [screen, setScreen] = useState<Screen>("home");
 
   const [name, setName] = useState("");
 
-  const [studentId] = useState(() => {
-    const saved = localStorage.getItem("acelearn_student_id");
-    if (saved) return saved;
+  const [subject, setSubject] = useState("Mathematics");
+  const [level, setLevel] = useState("JEE Main");
+  const [topic, setTopic] = useState("Quadratic Equations");
+  const [difficulty, setDifficulty] =
+    useState<Difficulty>("medium");
 
-    const id = `student-${crypto.randomUUID()}`;
-    localStorage.setItem("acelearn_student_id", id);
-    return id;
-  });
-
-  const [progressData, setProgressData] =
-    useState<ProgressData | null>(null);
-
-  const [progressLoading, setProgressLoading] =
-    useState(false);
-
-  const [progressError, setProgressError] =
-    useState("");
+  const [studyTime, setStudyTime] = useState("1 hour");
 
   const [currentQuestion, setCurrentQuestion] =
-    useState(0);
+    useState<Question | null>(null);
 
   const [selectedAnswer, setSelectedAnswer] =
     useState("");
 
-  const [diagnosticScore, setDiagnosticScore] =
-    useState(0);
-
-  const [sessionQuestion, setSessionQuestion] =
-    useState(0);
-
-  const [sessionScore, setSessionScore] =
-    useState(0);
-
   const [agentResponse, setAgentResponse] =
     useState<AgentResponse | null>(null);
+
+  const [loadingQuestion, setLoadingQuestion] =
+    useState(false);
 
   const [agentLoading, setAgentLoading] =
     useState(false);
 
-  const [sessionError, setSessionError] =
-    useState("");
+  const [error, setError] = useState("");
 
-  const [currentDifficulty, setCurrentDifficulty] =
-    useState<Difficulty>("easy");
+  const [questionNumber, setQuestionNumber] =
+    useState(1);
+
+  const [sessionScore, setSessionScore] =
+    useState(0);
+
+  const [sessionTotal, setSessionTotal] =
+    useState(0);
+
+  const [usedQuestions, setUsedQuestions] =
+    useState<string[]>([]);
 
   const [sessionHistory, setSessionHistory] =
     useState<string[]>([]);
 
-  // ================================
-  // UNIVERSAL AI CHAT
-  // ================================
-  type ChatMessage = {
-    id: string;
-    role: "user" | "assistant";
-    content: string;
-  };
+  const [progress, setProgress] = useState({
+    totalAttempts: 0,
+    correctAnswers: 0,
+    accuracy: 0,
+    currentStreak: 0,
+    bestStreak: 0,
+    skillLevel: "beginner",
+    currentDifficulty: "medium",
+    weakTopics: [] as string[],
+    strongTopics: [] as string[],
+  });
 
   const [chatMessages, setChatMessages] =
-    useState<ChatMessage[]>(() => {
-      try {
-        const saved = localStorage.getItem(
-          "acelearn_chat_messages"
-        );
-        return saved ? JSON.parse(saved) : [];
-      } catch {
-        return [];
-      }
-    });
+    useState<ChatMessage[]>([]);
 
-  const [chatInput, setChatInput] = useState("");
-  const [chatLoading, setChatLoading] = useState(false);
-  const [chatError, setChatError] = useState("");
+  const [chatInput, setChatInput] =
+    useState("");
+
+  const [chatLoading, setChatLoading] =
+    useState(false);
+
+  const studentId = useMemo(
+    () => getStudentId(),
+    []
+  );
+
+  // =========================================================
+  // LOAD SAVED STUDENT PROGRESS
+  // =========================================================
 
   useEffect(() => {
-    localStorage.setItem(
-      "acelearn_chat_messages",
-      JSON.stringify(chatMessages)
-    );
-  }, [chatMessages]);
+    async function loadProgress() {
+      try {
+        const response = await fetch(
+          `${API_BASE}/students/${studentId}/progress`
+        );
 
-  async function sendChatMessage() {
-    const message = chatInput.trim();
+        if (!response.ok) {
+          return;
+        }
 
-    if (!message || chatLoading) return;
+        const data = await response.json();
 
-    setChatMessages((previous) => [
-      ...previous,
-      {
-        id: crypto.randomUUID(),
-        role: "user",
-        content: message,
-      },
-    ]);
+        if (!data.success || !data.student) {
+          return;
+        }
 
-    setChatInput("");
-    setChatLoading(true);
-    setChatError("");
+        const student = data.student;
+
+        setProgress({
+          totalAttempts:
+            Number(student.total_attempts) || 0,
+          correctAnswers:
+            Number(student.correct_answers) || 0,
+          accuracy:
+            Number(student.accuracy) || 0,
+          currentStreak:
+            Number(student.current_streak) || 0,
+          bestStreak:
+            Number(student.best_streak) || 0,
+          skillLevel:
+            student.skill_level || "beginner",
+          currentDifficulty:
+            student.current_difficulty || "medium",
+          weakTopics: [],
+          strongTopics: [],
+        });
+      } catch {
+        // Progress is optional on first launch.
+      }
+    }
+
+    void loadProgress();
+  }, [studentId]);
+
+  // =========================================================
+  // GENERATE QUESTION FROM BACKEND
+  // =========================================================
+
+  async function generateQuestion(
+    requestedDifficulty: Difficulty = difficulty
+  ) {
+    setLoadingQuestion(true);
+    setError("");
+    setAgentResponse(null);
+    setSelectedAnswer("");
 
     try {
-      const response = await fetch("/api/chat", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          studentId,
-          message,
-        }),
-      });
+      const response = await fetch(
+        `${API_BASE}/agent/generate-question`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            studentId,
+            subject,
+            level,
+            topic,
+            difficulty: requestedDifficulty,
+            previousQuestions: usedQuestions,
+          }),
+        }
+      );
 
       if (!response.ok) {
         throw new Error(
-          `Backend returned ${response.status}`
+          `Question API returned ${response.status}`
         );
       }
 
       const data = await response.json();
 
-      if (!data.success || !data.answer) {
+      if (!data.success || !data.question) {
         throw new Error(
-          "Invalid AI chat response."
+          "Invalid question received from backend."
         );
       }
 
-      setChatMessages((previous) => [
+      const generated = data.question;
+
+      const question: Question = {
+        subject:
+          generated.subject || subject,
+
+        level:
+          generated.level || level,
+
+        topic:
+          generated.topic || topic,
+
+        difficulty:
+          generated.difficulty ||
+          requestedDifficulty,
+
+        question:
+          generated.question,
+
+        options:
+          Array.isArray(generated.options)
+            ? generated.options
+            : [],
+
+        correctAnswer:
+          generated.correctAnswer,
+
+        explanation:
+          generated.explanation ||
+          "",
+      };
+
+      if (
+        !question.question ||
+        question.options.length < 2 ||
+        !question.correctAnswer
+      ) {
+        throw new Error(
+          "Backend returned an incomplete question."
+        );
+      }
+
+      setCurrentQuestion(question);
+
+      setUsedQuestions((previous) => [
         ...previous,
-        {
-          id: crypto.randomUUID(),
-          role: "assistant",
-          content: data.answer,
-        },
+        question.question,
       ]);
-    } catch (error) {
+    } catch (err) {
       console.error(
-        "AceLearn chat error:",
-        error
+        "Question generation error:",
+        err
       );
 
-      setChatError(
-        "AI Chat se connection nahi ho pa raha. Backend port 3001 check karo."
+      setError(
+        "AI question generate nahi kar pa raha. Backend aur Groq connection check karo."
       );
     } finally {
-      setChatLoading(false);
+      setLoadingQuestion(false);
     }
   }
 
-  function clearChat() {
-    setChatMessages([]);
-    setChatError("");
-    localStorage.removeItem(
-      "acelearn_chat_messages"
+  // =========================================================
+  // START PRACTICE
+  // =========================================================
+
+  async function startSession() {
+    setSessionScore(0);
+    setSessionTotal(0);
+    setQuestionNumber(1);
+    setUsedQuestions([]);
+    setSessionHistory([]);
+    setCurrentQuestion(null);
+    setAgentResponse(null);
+    setSelectedAnswer("");
+    setError("");
+
+    setScreen("session");
+
+    await generateQuestion(
+      progress.currentDifficulty === "easy" ||
+        progress.currentDifficulty === "medium" ||
+        progress.currentDifficulty === "hard"
+        ? progress.currentDifficulty
+        : difficulty
     );
   }
 
-  // ================================
-  // LOAD REAL STUDENT PROGRESS
-  // ================================
+  // =========================================================
+  // ANALYZE ANSWER
+  // =========================================================
 
-  async function loadProgress() {
-    setProgressLoading(true);
-    setProgressError("");
-
-    try {
-      const response = await fetch(
-        `/api/students/${studentId}/progress`
-      );
-
-      if (response.status === 404) {
-        setProgressData(null);
-        return;
-      }
-
-      if (!response.ok) {
-        throw new Error(
-          `Backend returned ${response.status}`
-        );
-      }
-
-      const data: ProgressData =
-        await response.json();
-
-      if (!data.success) {
-        throw new Error(
-          "Invalid progress response."
-        );
-      }
-
-      setProgressData(data);
-    } catch (error) {
-      console.error(
-        "AceLearn progress error:",
-        error
-      );
-      setProgressError(
-        "Progress load nahi ho pa raha. Backend check karo."
-      );
-    } finally {
-      setProgressLoading(false);
-    }
-  }
-
-  useEffect(() => {
-    const savedName = localStorage.getItem(
-      "acelearn_student_name"
-    );
-    if (savedName) setName(savedName);
-  }, []);
-
-  useEffect(() => {
+  async function submitAnswer(answer: string) {
     if (
-      screen === "dashboard" ||
-      screen === "results"
+      !currentQuestion ||
+      agentLoading ||
+      loadingQuestion
     ) {
-      void loadProgress();
-    }
-  }, [screen, studentId]);
-
-  // ================================
-  // START ASSESSMENT
-  // ================================
-
-  function startAssessment() {
-    setCurrentQuestion(0);
-    setSelectedAnswer("");
-    setDiagnosticScore(0);
-    setScreen("assessment");
-  }
-
-  // ================================
-  // DIAGNOSTIC ANSWER
-  // ================================
-
-  function submitDiagnosticAnswer() {
-    if (!selectedAnswer) return;
-
-    const question =
-      diagnosticQuestions[currentQuestion];
-
-    const isCorrect =
-      selectedAnswer === question.answer;
-
-    const newScore = isCorrect
-      ? diagnosticScore + 1
-      : diagnosticScore;
-
-    setDiagnosticScore(newScore);
-    setSelectedAnswer("");
-
-    if (
-      currentQuestion ===
-      diagnosticQuestions.length - 1
-    ) {
-      setScreen("analysis");
       return;
     }
 
-    setCurrentQuestion(
-      currentQuestion + 1
-    );
-  }
-
-  // ================================
-  // START AI SESSION
-  // ================================
-
-  function startSession() {
-    setSessionQuestion(0);
-    setSessionScore(0);
-    setAgentResponse(null);
-    setAgentLoading(false);
-    setSessionError("");
-    setCurrentDifficulty("easy");
-    setSessionHistory([]);
-    setSelectedAnswer("");
-    setScreen("session");
-  }
-
-  // ================================
-  // REAL GROQ AI AGENT
-  // ================================
-
-  async function askAgent(
-    question: Question,
-    studentAnswer: string
-  ) {
+    setSelectedAnswer(answer);
     setAgentLoading(true);
-    setSessionError("");
-    setAgentResponse(null);
+    setError("");
 
     try {
       const response = await fetch(
-        "/api/agent/analyze",
+        `${API_BASE}/agent/analyze`,
         {
           method: "POST",
-
           headers: {
             "Content-Type": "application/json",
           },
-
           body: JSON.stringify({
             studentId,
-            question: question.question,
 
-            options: question.options,
+            question:
+              currentQuestion.question,
 
-            correctAnswer: question.answer,
+            options:
+              currentQuestion.options,
 
-            studentAnswer,
+            correctAnswer:
+              currentQuestion.correctAnswer,
 
-            topic: question.topic,
+            studentAnswer: answer,
 
-            difficulty: currentDifficulty,
+            topic:
+              currentQuestion.topic,
+
+            difficulty:
+              currentQuestion.difficulty,
 
             previousPerformance:
               sessionHistory.length > 0
@@ -500,7 +378,7 @@ function App() {
 
       if (!response.ok) {
         throw new Error(
-          `Backend returned ${response.status}`
+          `Analyze API returned ${response.status}`
         );
       }
 
@@ -508,111 +386,209 @@ function App() {
 
       if (!data.success || !data.agent) {
         throw new Error(
-          "Invalid AI response received."
+          "Invalid analysis response."
         );
       }
 
-      const agent: AgentResponse =
-        data.agent;
+      const result =
+        data.agent as AgentResponse;
 
-      setAgentResponse(agent);
+      setAgentResponse(result);
 
-      setCurrentDifficulty(
-        agent.nextDifficulty
+      if (result.correct) {
+        setSessionScore(
+          (previous) => previous + 1
+        );
+      }
+
+      setSessionTotal(
+        (previous) => previous + 1
       );
+
+      if (result.progress) {
+        setProgress({
+          totalAttempts:
+            result.progress.totalAttempts,
+          correctAnswers:
+            result.progress.correctAnswers,
+          accuracy:
+            result.progress.accuracy,
+          currentStreak:
+            result.progress.currentStreak,
+          bestStreak:
+            result.progress.bestStreak,
+          skillLevel:
+            result.progress.skillLevel,
+          currentDifficulty:
+            result.progress.currentDifficulty,
+          weakTopics:
+            result.progress.weakTopics || [],
+          strongTopics:
+            result.progress.strongTopics || [],
+        });
+      }
 
       setSessionHistory((previous) => [
         ...previous,
-        `Topic: ${question.topic}
-Difficulty: ${currentDifficulty}
-Student answer: ${studentAnswer}
-Correct: ${agent.correct}
-AI decision: ${agent.agentDecision}`,
+        [
+          `Question: ${currentQuestion.question}`,
+          `Topic: ${currentQuestion.topic}`,
+          `Difficulty: ${currentQuestion.difficulty}`,
+          `Student answer: ${answer}`,
+          `Correct: ${result.correct}`,
+          `Next difficulty: ${result.nextDifficulty}`,
+        ].join("\n"),
       ]);
-
-      if (agent.correct) {
-        setSessionScore(
-          (score) => score + 1
-        );
-      }
-
-      // Refresh persistent SQLite progress after every answer.
-      void loadProgress();
-    } catch (error) {
+    } catch (err) {
       console.error(
-        "AceLearn AI Agent Error:",
-        error
+        "Answer analysis error:",
+        err
       );
 
-      setSessionError(
-        "AI Agent se connection nahi ho pa raha. Please make sure backend port 3001 is running."
+      setError(
+        "AI answer analyze nahi kar pa raha. Backend check karo."
       );
     } finally {
       setAgentLoading(false);
     }
   }
 
-  // ================================
-  // SESSION ANSWER
-  // ================================
-
-  async function submitSessionAnswer(
-    answer: string
-  ) {
-    if (agentLoading) return;
-
-    setSelectedAnswer(answer);
-
-    const question =
-      adaptiveQuestions[sessionQuestion];
-
-    await askAgent(
-      question,
-      answer
-    );
-  }
-
-  // ================================
+  // =========================================================
   // NEXT QUESTION
-  // ================================
+  // =========================================================
 
-  function nextSessionQuestion() {
-    setAgentResponse(null);
-    setSelectedAnswer("");
-
-    if (
-      sessionQuestion ===
-      adaptiveQuestions.length - 1
-    ) {
-      setScreen("results");
+  async function nextQuestion() {
+    if (!agentResponse) {
       return;
     }
 
-    setSessionQuestion(
-      sessionQuestion + 1
+    const nextDifficulty =
+      agentResponse.nextDifficulty;
+
+    setQuestionNumber(
+      (previous) => previous + 1
+    );
+
+    setAgentResponse(null);
+    setSelectedAnswer("");
+
+    await generateQuestion(
+      nextDifficulty
     );
   }
 
-  // ================================
+  // =========================================================
+  // SEND CHAT MESSAGE
+  // =========================================================
+
+  async function sendChatMessage() {
+    const message = chatInput.trim();
+
+    if (!message || chatLoading) {
+      return;
+    }
+
+    setChatInput("");
+
+    setChatMessages((previous) => [
+      ...previous,
+      {
+        role: "user",
+        content: message,
+      },
+    ]);
+
+    setChatLoading(true);
+
+    try {
+      const response = await fetch(
+        `${API_BASE}/chat`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            studentId,
+            message,
+          }),
+        }
+      );
+
+      if (!response.ok) {
+        throw new Error(
+          `Chat API returned ${response.status}`
+        );
+      }
+
+      const data = await response.json();
+
+      if (!data.success || !data.answer) {
+        throw new Error(
+          "Invalid chat response."
+        );
+      }
+
+      setChatMessages((previous) => [
+        ...previous,
+        {
+          role: "assistant",
+          content: data.answer,
+        },
+      ]);
+    } catch (err) {
+      console.error(
+        "Chat error:",
+        err
+      );
+
+      setChatMessages((previous) => [
+        ...previous,
+        {
+          role: "assistant",
+          content:
+            "Sorry, AI se connection nahi ho pa raha. Backend check karo.",
+        },
+      ]);
+    } finally {
+      setChatLoading(false);
+    }
+  }
+
+  // =========================================================
+  // START CHAT
+  // =========================================================
+
+  function openChat() {
+    setScreen("chat");
+
+    if (chatMessages.length === 0) {
+      setChatMessages([
+        {
+          role: "assistant",
+          content:
+            "Hi! Main AceLearn AI hoon. Tum Mathematics, Physics, Chemistry, Biology, JEE, NEET, coding, English ya kisi bhi academic question ke baare mein mujhse pooch sakte ho.",
+        },
+      ]);
+    }
+  }
+
+  // =========================================================
   // HOME
-  // ================================
+  // =========================================================
 
   if (screen === "home") {
     return (
       <div className="app">
-
         <nav className="navbar">
-
           <div className="logo">
             <span className="logo-icon">
               ✦
             </span>
-
             AceLearn AI
           </div>
 
           <div className="nav-links">
-
             <a href="#features">
               Features
             </a>
@@ -624,31 +600,24 @@ AI decision: ${agent.agentDecision}`,
             <button
               className="nav-btn"
               onClick={() =>
-                setScreen("chat")
-              }
-            >
-              AI Chat
-            </button>
-
-            <button
-              className="nav-btn"
-              onClick={() =>
                 setScreen("setup")
               }
             >
               Try Demo
             </button>
 
+            <button
+              className="nav-btn"
+              onClick={openChat}
+            >
+              Ask AI
+            </button>
           </div>
-
         </nav>
 
         <main>
-
           <section className="hero">
-
             <div className="hero-content">
-
               <div className="badge">
                 <span>✦</span>
                 AI-POWERED LEARNING AGENT
@@ -663,63 +632,55 @@ AI decision: ${agent.agentDecision}`,
               </h1>
 
               <p className="hero-text">
-                AceLearn understands where you
-                struggle, builds your personalized
-                study plan, and adapts every
-                session to help you improve.
+                Ask questions, solve problems,
+                practice with AI-generated
+                questions, and get personalized
+                feedback based on your performance.
               </p>
 
               <div className="hero-actions">
-
                 <button
                   className="primary-btn"
                   onClick={() =>
                     setScreen("setup")
                   }
                 >
-                  Start Assessment →
+                  Start Learning →
                 </button>
 
                 <button
                   className="secondary-btn"
-                  onClick={() =>
-                    setScreen("setup")
-                  }
+                  onClick={openChat}
                 >
-                  Try Demo
+                  Ask AI Anything
                 </button>
-
               </div>
 
               <div className="trust">
-
                 <span>
                   ✓ No sign up
                 </span>
 
                 <span>
-                  ✓ Personalized
+                  ✓ AI generated questions
                 </span>
 
                 <span>
                   ✓ Adaptive learning
                 </span>
-
               </div>
-
             </div>
 
             <div className="agent-preview">
-
               <div className="preview-top">
-
                 <div>
                   <small>
                     YOUR AI STUDY AGENT
                   </small>
 
                   <h3>
-                    Good evening, Alex 👋
+                    Hi{" "}
+                    {name || "Student"} 👋
                   </h3>
                 </div>
 
@@ -727,141 +688,113 @@ AI decision: ${agent.agentDecision}`,
                   <span />
                   Active
                 </div>
-
               </div>
 
               <div className="agent-message">
-
                 <div className="agent-avatar">
                   ✦
                 </div>
 
                 <div>
                   <strong>
-                    I've noticed something...
+                    Ask me anything.
                   </strong>
 
                   <p>
-                    You're doing great in
-                    Reading, but Algebra needs
-                    a little more practice.
+                    I'll explain concepts,
+                    solve questions and help
+                    you improve.
                   </p>
                 </div>
-
               </div>
 
               <div className="skills">
-
                 <div className="skill">
-
                   <div>
                     <span>
-                      Math
+                      Accuracy
                     </span>
 
                     <strong>
-                      72%
+                      {Math.round(
+                        progress.accuracy
+                      )}
+                      %
                     </strong>
                   </div>
 
                   <div className="progress">
                     <span
                       style={{
-                        width: "72%",
+                        width: `${Math.min(
+                          100,
+                          Math.max(
+                            0,
+                            progress.accuracy
+                          )
+                        )}%`,
                       }}
                     />
                   </div>
-
                 </div>
 
                 <div className="skill">
-
                   <div>
                     <span>
-                      Reading
+                      Current Level
                     </span>
 
                     <strong>
-                      61%
+                      {progress.skillLevel}
                     </strong>
                   </div>
-
-                  <div className="progress">
-                    <span
-                      style={{
-                        width: "61%",
-                      }}
-                    />
-                  </div>
-
                 </div>
 
                 <div className="skill">
-
                   <div>
                     <span>
-                      Writing
+                      Difficulty
                     </span>
 
                     <strong>
-                      84%
+                      {progress.currentDifficulty}
                     </strong>
                   </div>
-
-                  <div className="progress">
-                    <span
-                      style={{
-                        width: "84%",
-                      }}
-                    />
-                  </div>
-
                 </div>
-
               </div>
 
               <div className="recommendation">
-
                 <div>
                   💡
                 </div>
 
                 <div>
-
                   <small>
                     AI RECOMMENDATION
                   </small>
 
                   <p>
-                    Review linear equations
-                    before moving to advanced
-                    algebra.
+                    {progress.accuracy < 50
+                      ? "Let's strengthen your weak topics first."
+                      : "Keep practicing and increase the difficulty gradually."}
                   </p>
-
                 </div>
-
               </div>
 
               <button
                 className="session-btn"
-                onClick={() =>
-                  setScreen("setup")
-                }
+                onClick={startSession}
               >
-                Continue Session →
+                Start AI Practice →
               </button>
-
             </div>
-
           </section>
 
           <section
             className="features"
             id="features"
           >
-
             <div className="section-heading">
-
               <p className="eyebrow">
                 BUILT FOR STUDENTS
               </p>
@@ -873,90 +806,75 @@ AI decision: ${agent.agentDecision}`,
                   An agent that acts.
                 </span>
               </h2>
-
             </div>
 
             <div className="feature-grid">
-
               <div className="feature-card">
-
                 <div className="feature-icon">
                   🧠
                 </div>
 
                 <h3>
-                  Finds your weaknesses
+                  Ask anything
                 </h3>
 
                 <p>
-                  Analyzes your answers to
-                  understand exactly where
-                  you need help.
+                  Ask academic questions and
+                  get direct explanations from
+                  the AI.
                 </p>
-
               </div>
 
               <div className="feature-card">
-
                 <div className="feature-icon">
                   🎯
                 </div>
 
                 <h3>
-                  Adapts to you
+                  Adaptive practice
                 </h3>
 
                 <p>
-                  Questions become easier or
-                  harder based on your actual
-                  performance.
+                  Questions are generated
+                  dynamically according to
+                  your selected topic and level.
                 </p>
-
               </div>
 
               <div className="feature-card">
-
                 <div className="feature-icon">
                   📈
                 </div>
 
                 <h3>
-                  Tracks your growth
+                  Tracks progress
                 </h3>
 
                 <p>
-                  Your agent continuously
-                  monitors progress and updates
-                  your study plan.
+                  Your answers are analyzed
+                  and saved to your learning
+                  profile.
                 </p>
-
               </div>
-
             </div>
-
           </section>
-
         </main>
-
       </div>
     );
   }
 
-  // ================================
+  // =========================================================
   // SETUP
-  // ================================
+  // =========================================================
 
   if (screen === "setup") {
     return (
       <div className="app">
-
         <nav className="navbar">
-
           <div className="logo">
             <span className="logo-icon">
               ✦
             </span>
-
             AceLearn AI
           </div>
 
@@ -968,40 +886,34 @@ AI decision: ${agent.agentDecision}`,
           >
             ← Back
           </button>
-
         </nav>
 
         <main className="setup-page">
-
           <div className="setup-header">
-
             <div className="setup-icon">
               🧠
             </div>
 
             <p className="eyebrow">
-              AI DIAGNOSTIC ASSESSMENT
+              AI LEARNING SETUP
             </p>
 
             <h1>
-              Let's understand
+              Let's personalize
               <br />
               <span>
-                how you learn.
+                your learning.
               </span>
             </h1>
 
             <p>
-              Answer a few questions and your AI
-              Study Agent will identify your
-              strengths, weaknesses, and create
-              your personalized plan.
+              Select your exam, subject,
+              topic and difficulty. AceLearn
+              AI will generate fresh questions.
             </p>
-
           </div>
 
           <div className="setup-card">
-
             <label>
               Your name
             </label>
@@ -1010,58 +922,132 @@ AI decision: ${agent.agentDecision}`,
               type="text"
               placeholder="Enter your name"
               value={name}
-              onChange={(e) => {
-                const value = e.target.value;
-                setName(value);
-                localStorage.setItem(
-                  "acelearn_student_name",
-                  value
-                );
-              }}
+              onChange={(event) =>
+                setName(
+                  event.target.value
+                )
+              }
             />
 
             <label>
-              What are you preparing for?
+              Exam / Level
             </label>
 
             <div className="option-grid">
+              {[
+                "JEE Main",
+                "JEE Advanced",
+                "NEET",
+                "SAT",
+                "Class 12",
+                "General Study",
+              ].map((item) => (
+                <button
+                  key={item}
+                  className={
+                    level === item
+                      ? "option active"
+                      : "option"
+                  }
+                  onClick={() =>
+                    setLevel(item)
+                  }
+                >
+                  <span>
+                    🎯
+                  </span>
 
-              <button className="option active">
+                  <div>
+                    <strong>
+                      {item}
+                    </strong>
 
-                <span>
-                  🎯
-                </span>
+                    <small>
+                      Personalized AI practice
+                    </small>
+                  </div>
+                </button>
+              ))}
+            </div>
 
-                <div>
-                  <strong>
-                    SAT
-                  </strong>
+            <label>
+              Subject
+            </label>
 
-                  <small>
-                    College entrance exam
-                  </small>
-                </div>
+            <select
+              value={subject}
+              onChange={(event) =>
+                setSubject(
+                  event.target.value
+                )
+              }
+            >
+              <option>
+                Mathematics
+              </option>
 
-              </button>
+              <option>
+                Physics
+              </option>
 
-              <button className="option">
+              <option>
+                Chemistry
+              </option>
 
-                <span>
-                  📚
-                </span>
+              <option>
+                Biology
+              </option>
 
-                <div>
-                  <strong>
-                    General Study
-                  </strong>
+              <option>
+                Computer Science
+              </option>
 
-                  <small>
-                    Improve academic skills
-                  </small>
-                </div>
+              <option>
+                English
+              </option>
+            </select>
 
-              </button>
+            <label>
+              Topic
+            </label>
 
+            <input
+              type="text"
+              value={topic}
+              placeholder="Example: Quadratic Equations"
+              onChange={(event) =>
+                setTopic(
+                  event.target.value
+                )
+              }
+            />
+
+            <label>
+              Difficulty
+            </label>
+
+            <div className="time-grid">
+              {(
+                [
+                  "easy",
+                  "medium",
+                  "hard",
+                ] as Difficulty[]
+              ).map((item) => (
+                <button
+                  key={item}
+                  className={
+                    difficulty === item
+                      ? "selected"
+                      : ""
+                  }
+                  onClick={() =>
+                    setDifficulty(item)
+                  }
+                >
+                  {item.toUpperCase()}
+                </button>
+              ))}
             </div>
 
             <label>
@@ -1069,1075 +1055,316 @@ AI decision: ${agent.agentDecision}`,
             </label>
 
             <div className="time-grid">
-
-              <button>
-                30 min
-              </button>
-
-              <button className="selected">
-                1 hour
-              </button>
-
-              <button>
-                2 hours
-              </button>
-
+              {[
+                "30 min",
+                "1 hour",
+                "2 hours",
+              ].map((item) => (
+                <button
+                  key={item}
+                  className={
+                    studyTime === item
+                      ? "selected"
+                      : ""
+                  }
+                  onClick={() =>
+                    setStudyTime(item)
+                  }
+                >
+                  {item}
+                </button>
+              ))}
             </div>
+
+            {error && (
+              <div className="agent-thinking error-box">
+                <div className="agent-avatar">
+                  !
+                </div>
+
+                <div>
+                  <strong>
+                    Error
+                  </strong>
+
+                  <p>
+                    {error}
+                  </p>
+                </div>
+              </div>
+            )}
 
             <button
               className="primary-btn full"
-              onClick={startAssessment}
+              onClick={startSession}
+              disabled={loadingQuestion}
             >
-              Start Diagnostic →
+              {loadingQuestion
+                ? "Preparing AI..."
+                : "Start AI Practice →"}
+            </button>
+
+            <button
+              className="secondary-btn full"
+              onClick={openChat}
+            >
+              Ask AI a Question
             </button>
 
             <p className="privacy-note">
-              No account required • Your session
-              is private
+              No account required • Your
+              learning progress is saved locally
+              for this demo.
             </p>
-
           </div>
-
         </main>
-
       </div>
     );
   }
 
-  // ================================
-  // ASSESSMENT
-  // ================================
-
-  if (screen === "assessment") {
-    const question =
-      diagnosticQuestions[currentQuestion];
-
-    const progress =
-      ((currentQuestion + 1) /
-        diagnosticQuestions.length) *
-      100;
-
-    return (
-      <div className="app">
-
-        <nav className="navbar">
-
-          <div className="logo">
-            <span className="logo-icon">
-              ✦
-            </span>
-
-            AceLearn AI
-          </div>
-
-          <div className="assessment-label">
-            AI Diagnostic Assessment
-          </div>
-
-        </nav>
-
-        <main className="assessment-page">
-
-          <div className="assessment-top">
-
-            <div>
-
-              <p className="eyebrow">
-                DIAGNOSTIC TEST
-              </p>
-
-              <h1>
-                Let's find your
-                <br />
-                <span>
-                  learning gaps.
-                </span>
-              </h1>
-
-            </div>
-
-            <div className="question-counter">
-              <strong>
-                {currentQuestion + 1}
-              </strong>
-
-              <span>
-                {" "}
-                /{" "}
-                {diagnosticQuestions.length}
-              </span>
-            </div>
-
-          </div>
-
-          <div className="assessment-progress">
-
-            <div
-              style={{
-                width: `${progress}%`,
-              }}
-            />
-
-          </div>
-
-          <div className="question-card">
-
-            <div className="question-meta">
-
-              <span>
-                {question.subject}
-              </span>
-
-              <span>
-                {question.topic}
-              </span>
-
-            </div>
-
-            <h2>
-              {question.question}
-            </h2>
-
-            <div className="answers">
-
-              {question.options.map(
-                (option, index) => (
-
-                  <button
-                    key={option}
-                    className={
-                      selectedAnswer === option
-                        ? "answer selected-answer"
-                        : "answer"
-                    }
-                    onClick={() =>
-                      setSelectedAnswer(option)
-                    }
-                  >
-
-                    <span className="answer-letter">
-                      {String.fromCharCode(
-                        65 + index
-                      )}
-                    </span>
-
-                    <span>
-                      {option}
-                    </span>
-
-                    {selectedAnswer ===
-                      option && (
-                      <span className="check">
-                        ✓
-                      </span>
-                    )}
-
-                  </button>
-
-                )
-              )}
-
-            </div>
-
-            <div className="question-footer">
-
-              <span>
-                Choose the answer you think is
-                correct.
-              </span>
-
-              <button
-                className="primary-btn"
-                disabled={!selectedAnswer}
-                onClick={
-                  submitDiagnosticAnswer
-                }
-              >
-
-                {currentQuestion ===
-                diagnosticQuestions.length - 1
-                  ? "Finish Assessment"
-                  : "Next Question →"}
-
-              </button>
-
-            </div>
-
-          </div>
-
-          <div className="agent-tip">
-
-            <div className="agent-avatar">
-              ✦
-            </div>
-
-            <div>
-
-              <strong>
-                Your AI Agent is watching your
-                progress
-              </strong>
-
-              <p>
-                Your answers will help me
-                understand which skills need
-                more practice.
-              </p>
-
-            </div>
-
-          </div>
-
-        </main>
-
-      </div>
-    );
-  }
-
-  // ================================
-  // ANALYSIS
-  // ================================
-
-  if (screen === "analysis") {
-    const percentage = Math.round(
-      (diagnosticScore /
-        diagnosticQuestions.length) *
-        100
-    );
-
-    return (
-      <div className="app">
-
-        <nav className="navbar">
-
-          <div className="logo">
-            <span className="logo-icon">
-              ✦
-            </span>
-
-            AceLearn AI
-          </div>
-
-        </nav>
-
-        <main className="analysis-page">
-
-          <div className="analysis-icon">
-            ✦
-          </div>
-
-          <p className="eyebrow">
-            AI ANALYSIS COMPLETE
-          </p>
-
-          <h1>
-            I've learned how
-            <br />
-            <span>
-              you learn.
-            </span>
-          </h1>
-
-          <p className="analysis-description">
-            Your AI Study Agent analyzed your
-            answers and created a personalized
-            learning strategy for you.
-          </p>
-
-          <div className="score-card">
-
-            <div className="score-circle">
-
-              <strong>
-                {percentage}%
-              </strong>
-
-              <span>
-                Diagnostic
-              </span>
-
-            </div>
-
-            <div className="score-info">
-
-              <h3>
-                {name
-                  ? `${name}, here's what I found.`
-                  : "Here's what I found."}
-              </h3>
-
-              <p>
-                You have a good foundation, but
-                there are a few areas where
-                targeted practice can make a big
-                difference.
-              </p>
-
-            </div>
-
-          </div>
-
-          <div className="analysis-grid">
-
-            <div className="analysis-card">
-
-              <span className="analysis-card-icon">
-                💪
-              </span>
-
-              <small>
-                YOUR STRENGTH
-              </small>
-
-              <h3>
-                Reading & Writing
-              </h3>
-
-              <p>
-                You're showing strong
-                comprehension and grammar
-                skills.
-              </p>
-
-            </div>
-
-            <div className="analysis-card">
-
-              <span className="analysis-card-icon">
-                🎯
-              </span>
-
-              <small>
-                NEEDS ATTENTION
-              </small>
-
-              <h3>
-                Math & Algebra
-              </h3>
-
-              <p>
-                Let's strengthen your algebra
-                fundamentals before moving to
-                advanced problems.
-              </p>
-
-            </div>
-
-          </div>
-
-          <div className="agent-plan">
-
-            <div className="agent-avatar">
-              ✦
-            </div>
-
-            <div>
-
-              <small>
-                YOUR AI AGENT'S PLAN
-              </small>
-
-              <h3>
-                I've created your personalized
-                learning path.
-              </h3>
-
-              <p>
-                We'll start with Algebra
-                fundamentals, then gradually
-                increase difficulty as your
-                accuracy improves.
-              </p>
-
-            </div>
-
-          </div>
-
-          <button
-            className="primary-btn analysis-button"
-            onClick={() =>
-              setScreen("dashboard")
-            }
-          >
-            View My Learning Dashboard →
-          </button>
-
-        </main>
-
-      </div>
-    );
-  }
-
-  // ================================
-  // DASHBOARD
-  // ================================
-
-  if (screen === "dashboard") {
-    return (
-      <div className="app">
-
-        <nav className="navbar">
-
-          <div className="logo">
-            <span className="logo-icon">
-              ✦
-            </span>
-
-            AceLearn AI
-          </div>
-
-          <div className="dashboard-status">
-            <span className="status-dot" />
-            AI Agent Active
-          </div>
-
-        </nav>
-
-        <main className="dashboard-page">
-
-          <div className="dashboard-header">
-
-            <div>
-
-              <p className="eyebrow">
-                PERSONALIZED LEARNING
-              </p>
-
-              <h1>
-                Good evening
-                {name
-                  ? `, ${name}`
-                  : ""}{" "}
-                👋
-              </h1>
-
-              <p>
-                Your AI Study Agent has created
-                a plan based on your diagnostic
-                results.
-              </p>
-
-            </div>
-
-            <div className="streak-card">
-
-              <span>
-                🔥
-              </span>
-
-              <div>
-
-                <strong>
-                  {progressData?.student.current_streak ?? 0} day streak
-                </strong>
-
-                <small>
-                  Keep it going!
-                </small>
-
-              </div>
-
-            </div>
-
-          </div>
-
-          <div className="dashboard-grid">
-            <section className="dashboard-card">
-              <div className="card-heading">
-                <div>
-                  <small>LEARNING STATS</small>
-                  <h2>Real-time progress</h2>
-                </div>
-              </div>
-              {progressLoading ? (
-                <p>Loading your progress...</p>
-              ) : progressError ? (
-                <p>{progressError}</p>
-              ) : (
-                <div className="plan-grid">
-                  <div className="plan-day">
-                    <small>ACCURACY</small>
-                    <strong>{progressData?.student.accuracy ?? 0}%</strong>
-                    <span>{progressData?.student.total_attempts ?? 0} attempts</span>
-                  </div>
-                  <div className="plan-day">
-                    <small>STREAK</small>
-                    <strong>🔥 {progressData?.student.current_streak ?? 0}</strong>
-                    <span>Best: {progressData?.student.best_streak ?? 0}</span>
-                  </div>
-                  <div className="plan-day">
-                    <small>LEVEL</small>
-                    <strong>{progressData?.student.skill_level || "Beginner"}</strong>
-                    <span>{progressData?.student.current_difficulty || "easy"} difficulty</span>
-                  </div>
-                </div>
-              )}
-            </section>
-          </div>
-
-          <section className="agent-decision">
-
-            <div className="agent-avatar large">
-              ✦
-            </div>
-
-            <div className="decision-content">
-
-              <div className="decision-title">
-
-                <span>
-                  AI AGENT DECISION
-                </span>
-
-                <small>
-                  Just now
-                </small>
-
-              </div>
-
-              <h2>
-                I've adjusted your learning
-                plan.
-              </h2>
-
-              <p>
-                {progressData?.student.last_recommendation ||
-                  "Complete a practice question and I'll analyze your performance to build your personalized plan."}
-              </p>
-
-              <div className="decision-tags">
-
-                <span>
-                  🎯 {progressData?.topics?.[0]?.topic || "Personalized Priority"}
-                </span>
-
-                <span>
-                  📈 Adaptive Difficulty
-                </span>
-
-                <span>
-                  🧠 Personalized
-                </span>
-
-              </div>
-
-            </div>
-
-          </section>
-
-          <div className="dashboard-grid">
-
-            <section className="dashboard-card mission-card">
-
-              <div className="card-heading">
-
-                <div>
-
-                  <small>
-                    TODAY'S MISSION
-                  </small>
-
-                  <h2>
-                    {progressData?.topics?.[0]?.topic
-                      ? `Build your ${progressData.topics[0].topic} foundation`
-                      : "Build your learning foundation"}
-                  </h2>
-
-                </div>
-
-                <span className="mission-time">
-                  25 min
-                </span>
-
-              </div>
-
-              <p className="mission-description">
-                {progressData?.student.last_recommendation ||
-                  "Start a practice session and your AI Agent will decide what you should practice next."}
-              </p>
-
-              <div className="mission-steps">
-
-                <div className="mission-step complete">
-
-                  <span>
-                    ✓
-                  </span>
-
-                  <div>
-
-                    <strong>
-                      Diagnostic analysis
-                    </strong>
-
-                    <small>
-                      Completed
-                    </small>
-
-                  </div>
-
-                </div>
-
-                <div className="mission-step active-step">
-
-                  <span>
-                    2
-                  </span>
-
-                  <div>
-
-                    <strong>
-                      Algebra fundamentals
-                    </strong>
-
-                    <small>
-                      10 questions
-                    </small>
-
-                  </div>
-
-                </div>
-
-                <div className="mission-step">
-
-                  <span>
-                    3
-                  </span>
-
-                  <div>
-
-                    <strong>
-                      Adaptive challenge
-                    </strong>
-
-                    <small>
-                      AI decides difficulty
-                    </small>
-
-                  </div>
-
-                </div>
-
-              </div>
-
-              <button
-                className="primary-btn mission-button"
-                onClick={startSession}
-              >
-                Start Today's Mission →
-              </button>
-
-            </section>
-
-            <section className="dashboard-card">
-
-              <div className="card-heading">
-
-                <div>
-
-                  <small>
-                    YOUR PROGRESS
-                  </small>
-
-                  <h2>
-                    Skill overview
-                  </h2>
-
-                </div>
-
-              </div>
-
-              <div className="dashboard-skill">
-                <div>
-                  <span>Overall</span>
-                  <strong>
-                    {progressData?.student.accuracy ?? 0}%
-                  </strong>
-                </div>
-
-                <div className="dashboard-progress">
-                  <span
-                    style={{
-                      width: `${Math.min(
-                        progressData?.student.accuracy ?? 0,
-                        100
-                      )}%`,
-                    }}
-                  />
-                </div>
-
-                <small>
-                  {progressData?.student.skill_level || "No data yet"}
-                </small>
-              </div>
-
-              {progressData?.topics?.length ? (
-                progressData.topics.slice(0, 3).map((topic) => (
-                  <div
-                    className="dashboard-skill"
-                    key={topic.topic}
-                  >
-                    <div>
-                      <span>{topic.topic}</span>
-                      <strong>{Math.round(topic.accuracy)}%</strong>
-                    </div>
-
-                    <div className="dashboard-progress">
-                      <span
-                        style={{
-                          width: `${Math.min(topic.accuracy, 100)}%`,
-                        }}
-                      />
-                    </div>
-
-                    <small>
-                      {topic.accuracy < 60
-                        ? "Needs practice"
-                        : topic.accuracy < 80
-                        ? "Improving"
-                        : "Strong"}
-                    </small>
-                  </div>
-                ))
-              ) : (
-                <p>
-                  Complete your first practice question to see topic-level progress.
-                </p>
-              )}
-
-            </section>
-
-          </div>
-
-          <section className="dashboard-card weekly-plan">
-
-            <div className="card-heading">
-
-              <div>
-
-                <small>
-                  AI GENERATED PLAN
-                </small>
-
-                <h2>
-                  This week's learning path
-                </h2>
-
-              </div>
-
-              <span className="plan-badge">
-                Personalized
-              </span>
-
-            </div>
-
-            <div className="plan-grid">
-
-              {[
-                ["MON", "Algebra", "25 min"],
-                ["TUE", "Reading", "30 min"],
-                ["WED", "Geometry", "25 min"],
-                ["THU", "Algebra", "30 min"],
-                [
-                  "FRI",
-                  "Mixed Practice",
-                  "40 min",
-                ],
-                ["SAT", "Mini Test", "45 min"],
-              ].map(
-                ([day, subject, time], index) => (
-
-                  <div
-                    key={day}
-                    className={
-                      index === 0
-                        ? "plan-day today"
-                        : "plan-day"
-                    }
-                  >
-
-                    <small>
-                      {day}
-                    </small>
-
-                    <strong>
-                      {subject}
-                    </strong>
-
-                    <span>
-                      {time}
-                    </span>
-
-                  </div>
-
-                )
-              )}
-
-            </div>
-
-          </section>
-
-          <section className="dashboard-card next-action">
-
-            <div className="next-icon">
-              ✦
-            </div>
-
-            <div>
-
-              <small>
-                NEXT ACTION
-              </small>
-
-              <h3>
-                Ready to improve your Algebra?
-              </h3>
-
-              <p>
-                Your AI Agent is ready with your
-                first adaptive practice session.
-              </p>
-
-            </div>
-
-            <button
-              className="secondary-btn"
-              onClick={startSession}
-            >
-              Start Practice
-            </button>
-
-          </section>
-
-        </main>
-
-      </div>
-    );
-  }
-
-  // ================================
-  // AI SESSION
-  // ================================
+  // =========================================================
+  // SESSION
+  // =========================================================
 
   if (screen === "session") {
-    const question =
-      adaptiveQuestions[sessionQuestion];
-
-    const progress =
-      ((sessionQuestion + 1) /
-        adaptiveQuestions.length) *
-      100;
-
     return (
       <div className="app">
-
         <nav className="navbar">
-
           <div className="logo">
-
             <span className="logo-icon">
               ✦
             </span>
-
             AceLearn AI
-
           </div>
 
           <div className="dashboard-status">
-
             <span className="status-dot" />
-
             AI Agent Active
-
           </div>
-
         </nav>
 
         <main className="session-page">
-
           <div className="session-header">
-
             <div>
-
               <p className="eyebrow">
                 TODAY'S AI SESSION
               </p>
 
               <h1>
-                Adaptive Algebra
+                {subject} Practice
               </h1>
 
               <p>
-                Your AI Agent is analyzing your
-                answers in real time.
+                {level} • {topic}
               </p>
-
             </div>
 
             <div className="session-progress-text">
               Question{" "}
-              {sessionQuestion + 1} /{" "}
-              {adaptiveQuestions.length}
+              {questionNumber}
             </div>
-
-          </div>
-
-          <div className="assessment-progress">
-
-            <div
-              style={{
-                width: `${progress}%`,
-              }}
-            />
-
           </div>
 
           <div className="adaptive-status">
-
             <div className="agent-avatar">
               ✦
             </div>
 
             <div>
-
               <strong>
                 AI Agent is active
               </strong>
 
               <p>
-
                 Current difficulty:
-
                 <span className="difficulty">
                   {" "}
-                  {currentDifficulty.toUpperCase()}
+                  {(
+                    currentQuestion?.difficulty ||
+                    difficulty
+                  ).toUpperCase()}
                 </span>
-
               </p>
-
             </div>
-
           </div>
 
-          <div className="session-question-card">
-
-            <div className="question-meta">
-
-              <span>
-                {question.topic}
-              </span>
-
-              <span>
-                {currentDifficulty}
-              </span>
-
-            </div>
-
-            <h2>
-              {question.question}
-            </h2>
-
-            <div className="answers">
-
-              {question.options.map(
-                (option, index) => (
-
-                  <button
-                    key={option}
-                    className={
-                      selectedAnswer === option
-                        ? "answer selected-answer"
-                        : "answer"
-                    }
-                    disabled={agentLoading}
-                    onClick={() =>
-                      submitSessionAnswer(
-                        option
-                      )
-                    }
-                  >
-
-                    <span className="answer-letter">
-                      {String.fromCharCode(
-                        65 + index
-                      )}
-                    </span>
-
-                    <span>
-                      {option}
-                    </span>
-
-                    {selectedAnswer ===
-                      option && (
-                      <span className="check">
-                        ✓
-                      </span>
-                    )}
-
-                  </button>
-
-                )
-              )}
-
-            </div>
-
-          </div>
-
-          {agentLoading && (
-
+          {loadingQuestion && (
             <div className="agent-thinking">
-
               <div className="agent-avatar">
                 ✦
               </div>
 
               <div>
-
                 <strong>
-                  AceLearn AI is thinking...
+                  Generating a fresh question...
                 </strong>
 
                 <p>
-                  I'm analyzing your answer and
-                  deciding what you should practice
-                  next.
+                  AceLearn AI is creating a
+                  new question for you.
                 </p>
-
               </div>
-
             </div>
-
           )}
 
-          {sessionError && (
-
+          {error && (
             <div className="agent-thinking error-box">
-
               <div className="agent-avatar">
                 !
               </div>
 
               <div>
-
                 <strong>
                   Connection problem
                 </strong>
 
                 <p>
-                  {sessionError}
+                  {error}
                 </p>
 
+                <button
+                  className="secondary-btn"
+                  onClick={() =>
+                    generateQuestion(
+                      difficulty
+                    )
+                  }
+                >
+                  Retry
+                </button>
+              </div>
+            </div>
+          )}
+
+          {currentQuestion &&
+            !loadingQuestion && (
+              <div className="session-question-card">
+                <div className="question-meta">
+                  <span>
+                    {currentQuestion.subject}
+                  </span>
+
+                  <span>
+                    {currentQuestion.topic}
+                  </span>
+
+                  <span>
+                    {currentQuestion.difficulty}
+                  </span>
+                </div>
+
+                <h2>
+                  {currentQuestion.question}
+                </h2>
+
+                <div className="answers">
+                  {currentQuestion.options.map(
+                    (option, index) => {
+                      const isSelected =
+                        selectedAnswer ===
+                        option;
+
+                      const isCorrect =
+                        agentResponse &&
+                        option ===
+                          currentQuestion.correctAnswer;
+
+                      const isWrongSelected =
+                        agentResponse &&
+                        isSelected &&
+                        !agentResponse.correct;
+
+                      let className =
+                        "answer";
+
+                      if (isSelected) {
+                        className +=
+                          " selected-answer";
+                      }
+
+                      if (isCorrect) {
+                        className +=
+                          " correct-answer";
+                      }
+
+                      if (
+                        isWrongSelected
+                      ) {
+                        className +=
+                          " wrong-answer";
+                      }
+
+                      return (
+                        <button
+                          key={`${option}-${index}`}
+                          className={
+                            className
+                          }
+                          disabled={
+                            agentLoading ||
+                            Boolean(
+                              agentResponse
+                            )
+                          }
+                          onClick={() =>
+                            submitAnswer(
+                              option
+                            )
+                          }
+                        >
+                          <span className="answer-letter">
+                            {String.fromCharCode(
+                              65 + index
+                            )}
+                          </span>
+
+                          <span>
+                            {option}
+                          </span>
+
+                          {isCorrect && (
+                            <span className="check">
+                              ✓
+                            </span>
+                          )}
+
+                          {isWrongSelected && (
+                            <span className="check">
+                              ✕
+                            </span>
+                          )}
+                        </button>
+                      );
+                    }
+                  )}
+                </div>
+              </div>
+            )}
+
+          {agentLoading && (
+            <div className="agent-thinking">
+              <div className="agent-avatar">
+                ✦
               </div>
 
-            </div>
+              <div>
+                <strong>
+                  AceLearn AI is thinking...
+                </strong>
 
+                <p>
+                  I'm checking your answer
+                  and deciding what you should
+                  practice next.
+                </p>
+              </div>
+            </div>
           )}
 
           {agentResponse &&
-            !agentLoading && (
-
+            !agentLoading &&
+            currentQuestion && (
               <div className="agent-result">
-
                 <div className="agent-avatar">
                   {agentResponse.correct
                     ? "✓"
@@ -2145,21 +1372,17 @@ AI decision: ${agent.agentDecision}`,
                 </div>
 
                 <div className="agent-result-content">
-
                   <div className="agent-result-header">
-
                     <div>
-
                       <small>
                         AI AGENT
                       </small>
 
                       <h3>
                         {agentResponse.correct
-                          ? "Excellent work!"
-                          : "Let's work on this."}
+                          ? "Correct Answer! 🎉"
+                          : "Not quite — let's fix it."}
                       </h3>
-
                     </div>
 
                     <span
@@ -2171,19 +1394,53 @@ AI decision: ${agent.agentDecision}`,
                     >
                       {agentResponse.correct
                         ? "Correct"
-                        : "Review"}
+                        : "Incorrect"}
                     </span>
-
                   </div>
 
                   <p className="agent-feedback">
                     {agentResponse.feedback}
                   </p>
 
+                  {!agentResponse.correct && (
+                    <div className="agent-recommendation">
+                      <strong>
+                        ✓ Correct answer
+                      </strong>
+
+                      <p>
+                        {agentResponse.correctAnswer ||
+                          currentQuestion.correctAnswer}
+                      </p>
+                    </div>
+                  )}
+
+                  <div className="agent-recommendation">
+                    <strong>
+                      📘 Explanation
+                    </strong>
+
+                    <p>
+                      {agentResponse.explanation ||
+                        currentQuestion.explanation ||
+                        "No explanation was returned."}
+                    </p>
+                  </div>
+
+                  {agentResponse.mistake && (
+                    <div className="agent-reason">
+                      <small>
+                        WHAT WENT WRONG
+                      </small>
+
+                      <p>
+                        {agentResponse.mistake}
+                      </p>
+                    </div>
+                  )}
+
                   <div className="agent-decision-box">
-
                     <div>
-
                       <small>
                         NEXT DIFFICULTY
                       </small>
@@ -2191,11 +1448,9 @@ AI decision: ${agent.agentDecision}`,
                       <strong>
                         {agentResponse.nextDifficulty.toUpperCase()}
                       </strong>
-
                     </div>
 
                     <div>
-
                       <small>
                         SKILL LEVEL
                       </small>
@@ -2203,13 +1458,21 @@ AI decision: ${agent.agentDecision}`,
                       <strong>
                         {agentResponse.skillLevel}
                       </strong>
-
                     </div>
 
+                    <div>
+                      <small>
+                        SCORE
+                      </small>
+
+                      <strong>
+                        {sessionScore}/
+                        {sessionTotal}
+                      </strong>
+                    </div>
                   </div>
 
                   <div className="agent-recommendation">
-
                     <strong>
                       🎯 Agent recommendation
                     </strong>
@@ -2217,11 +1480,9 @@ AI decision: ${agent.agentDecision}`,
                     <p>
                       {agentResponse.recommendation}
                     </p>
-
                   </div>
 
                   <div className="agent-reason">
-
                     <small>
                       WHY THE AGENT DECIDED THIS
                     </small>
@@ -2229,357 +1490,561 @@ AI decision: ${agent.agentDecision}`,
                     <p>
                       {agentResponse.agentDecision}
                     </p>
-
                   </div>
 
                   <button
                     className="primary-btn"
-                    onClick={
-                      nextSessionQuestion
-                    }
+                    onClick={nextQuestion}
                   >
-
-                    {sessionQuestion ===
-                    adaptiveQuestions.length - 1
-                      ? "See My Results →"
-                      : "Continue →"}
-
+                    Generate Next Question →
                   </button>
 
+                  <button
+                    className="secondary-btn"
+                    onClick={() =>
+                      setScreen("dashboard")
+                    }
+                  >
+                    Back to Dashboard
+                  </button>
                 </div>
-
               </div>
             )}
-
         </main>
-
       </div>
     );
   }
 
-  // ================================
-  // UNIVERSAL AI CHAT
-  // ================================
+  // =========================================================
+  // CHAT
+  // =========================================================
 
   if (screen === "chat") {
     return (
-      <div
-        className="app"
-        style={{
-          minHeight: "100vh",
-          display: "flex",
-          flexDirection: "column",
-        }}
-      >
+      <div className="app">
         <nav className="navbar">
           <div className="logo">
-            <span className="logo-icon">✦</span>
+            <span className="logo-icon">
+              ✦
+            </span>
             AceLearn AI
           </div>
 
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: "10px",
-            }}
+          <button
+            className="back-btn"
+            onClick={() =>
+              setScreen("home")
+            }
           >
-            <button
-              className="secondary-btn"
-              onClick={clearChat}
-              disabled={
-                chatLoading ||
-                chatMessages.length === 0
-              }
-            >
-              Clear Chat
-            </button>
-
-            <button
-              className="back-btn"
-              onClick={() => setScreen("home")}
-            >
-              ← Back
-            </button>
-          </div>
+            ← Home
+          </button>
         </nav>
 
-        <main
-          style={{
-            width: "100%",
-            maxWidth: "1000px",
-            margin: "0 auto",
-            padding: "32px 20px",
-            boxSizing: "border-box",
-            display: "flex",
-            flexDirection: "column",
-            flex: 1,
-          }}
-        >
-          <div style={{ marginBottom: "24px" }}>
-            <p className="eyebrow">
-              ACELEARN AI CHAT
-            </p>
+        <main className="session-page">
+          <div className="session-header">
+            <div>
+              <p className="eyebrow">
+                AI STUDY ASSISTANT
+              </p>
 
-            <h1 style={{ marginBottom: "8px" }}>
-              Ask me anything.
-            </h1>
+              <h1>
+                Ask AceLearn AI
+              </h1>
 
-            <p>
-              Ask questions about Math, Physics,
-              Chemistry, Biology, coding, exams,
-              concepts, homework, or study planning.
-            </p>
+              <p>
+                Ask questions from any subject
+                and get step-by-step help.
+              </p>
+            </div>
           </div>
 
-          <div
-            style={{
-              minHeight: "420px",
-              maxHeight: "58vh",
-              overflowY: "auto",
-              padding: "20px",
-              borderRadius: "24px",
-              background: "rgba(255,255,255,0.72)",
-              border: "1px solid rgba(0,0,0,0.08)",
-              boxShadow:
-                "0 16px 45px rgba(0,0,0,0.06)",
-              display: "flex",
-              flexDirection: "column",
-              gap: "14px",
-            }}
-          >
-            {chatMessages.length === 0 && (
+          <div className="agent-result">
+            <div
+              className="agent-result-content"
+              style={{
+                width: "100%",
+              }}
+            >
               <div
-                style={{
-                  margin: "auto",
-                  textAlign: "center",
-                  maxWidth: "620px",
-                  padding: "30px 10px",
-                }}
-              >
-                <div
-                  style={{
-                    fontSize: "42px",
-                    marginBottom: "12px",
-                  }}
-                >
-                  ✦
-                </div>
-
-                <h2>Your AI Study Assistant</h2>
-
-                <p>Try asking:</p>
-
-                <div
-                  style={{
-                    display: "grid",
-                    gap: "8px",
-                    marginTop: "16px",
-                  }}
-                >
-                  {[
-                    "Explain Newton's laws in simple language.",
-                    "Solve 2x + 5 = 17 step by step.",
-                    "What is photosynthesis?",
-                    "Make me a 7-day JEE study plan.",
-                  ].map((suggestion) => (
-                    <button
-                      key={suggestion}
-                      className="secondary-btn"
-                      onClick={() =>
-                        setChatInput(suggestion)
-                      }
-                      style={{
-                        textAlign: "left",
-                        width: "100%",
-                      }}
-                    >
-                      {suggestion}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {chatMessages.map((message) => (
-              <div
-                key={message.id}
                 style={{
                   display: "flex",
-                  justifyContent:
-                    message.role === "user"
-                      ? "flex-end"
-                      : "flex-start",
+                  flexDirection: "column",
+                  gap: "16px",
+                  maxHeight: "500px",
+                  overflowY: "auto",
+                  marginBottom: "20px",
                 }}
               >
-                <div
-                  style={{
-                    maxWidth: "78%",
-                    padding: "14px 16px",
-                    borderRadius:
-                      message.role === "user"
-                        ? "18px 18px 4px 18px"
-                        : "18px 18px 18px 4px",
-                    background:
-                      message.role === "user"
-                        ? "#111827"
-                        : "rgba(0,0,0,0.05)",
-                    color:
-                      message.role === "user"
-                        ? "#fff"
-                        : "inherit",
-                    whiteSpace: "pre-wrap",
-                    lineHeight: 1.6,
-                    overflowWrap: "anywhere",
-                  }}
-                >
-                  <small
-                    style={{
-                      display: "block",
-                      opacity: 0.65,
-                      marginBottom: "5px",
-                      fontWeight: 700,
-                    }}
+                {chatMessages.map(
+                  (message, index) => (
+                    <div
+                      key={`${message.role}-${index}`}
+                      style={{
+                        padding: "16px",
+                        borderRadius:
+                          "14px",
+                        background:
+                          message.role ===
+                          "user"
+                            ? "rgba(99,102,241,0.12)"
+                            : "rgba(255,255,255,0.06)",
+                      }}
+                    >
+                      <strong>
+                        {message.role ===
+                        "user"
+                          ? "You"
+                          : "AceLearn AI"}
+                      </strong>
+
+                      <p
+                        style={{
+                          whiteSpace:
+                            "pre-wrap",
+                          marginTop: "8px",
+                        }}
+                      >
+                        {message.content}
+                      </p>
+                    </div>
+                  )
+                )}
+
+                {chatLoading && (
+                  <div
+                    className="agent-thinking"
                   >
-                    {message.role === "user"
-                      ? "YOU"
-                      : "ACELEARN AI"}
-                  </small>
+                    <div className="agent-avatar">
+                      ✦
+                    </div>
 
-                  {message.content}
-                </div>
+                    <div>
+                      <strong>
+                        AceLearn AI is
+                        thinking...
+                      </strong>
+
+                      <p>
+                        Preparing your
+                        answer.
+                      </p>
+                    </div>
+                  </div>
+                )}
               </div>
-            ))}
 
-            {chatLoading && (
               <div
                 style={{
-                  padding: "14px 16px",
-                  borderRadius:
-                    "18px 18px 18px 4px",
-                  background:
-                    "rgba(0,0,0,0.05)",
-                  alignSelf: "flex-start",
+                  display: "flex",
+                  gap: "10px",
+                  alignItems: "stretch",
                 }}
               >
-                <strong>
-                  AceLearn AI is thinking...
-                </strong>
-              </div>
-            )}
+                <input
+                  type="text"
+                  value={chatInput}
+                  placeholder="Ask anything..."
+                  onChange={(event) =>
+                    setChatInput(
+                      event.target.value
+                    )
+                  }
+                  onKeyDown={(event) => {
+                    if (
+                      event.key === "Enter"
+                    ) {
+                      void sendChatMessage();
+                    }
+                  }}
+                  disabled={chatLoading}
+                  style={{
+                    flex: 1,
+                  }}
+                />
 
-            {chatError && (
-              <div
-                style={{
-                  padding: "12px 14px",
-                  borderRadius: "12px",
-                  background:
-                    "rgba(220,38,38,0.08)",
-                  color: "#b91c1c",
-                }}
-              >
-                {chatError}
+                <button
+                  className="primary-btn"
+                  onClick={() =>
+                    void sendChatMessage()
+                  }
+                  disabled={
+                    chatLoading ||
+                    !chatInput.trim()
+                  }
+                >
+                  Send
+                </button>
               </div>
-            )}
+            </div>
           </div>
-
-          <form
-            onSubmit={(event) => {
-              event.preventDefault();
-              void sendChatMessage();
-            }}
-            style={{
-              display: "flex",
-              gap: "10px",
-              marginTop: "16px",
-            }}
-          >
-            <input
-              value={chatInput}
-              onChange={(event) =>
-                setChatInput(event.target.value)
-              }
-              placeholder="Ask AceLearn AI anything..."
-              disabled={chatLoading}
-              style={{
-                flex: 1,
-                minWidth: 0,
-                padding: "15px 17px",
-                borderRadius: "16px",
-                border:
-                  "1px solid rgba(0,0,0,0.14)",
-                outline: "none",
-                fontSize: "16px",
-                background: "#fff",
-              }}
-            />
-
-            <button
-              className="primary-btn"
-              type="submit"
-              disabled={
-                chatLoading ||
-                !chatInput.trim()
-              }
-            >
-              {chatLoading ? "..." : "Send →"}
-            </button>
-          </form>
-
-          <p
-            style={{
-              textAlign: "center",
-              fontSize: "12px",
-              opacity: 0.55,
-              marginTop: "10px",
-            }}
-          >
-            AI can make mistakes. Verify important
-            academic information.
-          </p>
         </main>
       </div>
     );
   }
 
-  // ================================
-  // RESULTS
-  // ================================
+  // =========================================================
+  // DASHBOARD
+  // =========================================================
 
-  if (screen === "results") {
-    const percentage = Math.round(
-      (sessionScore /
-        adaptiveQuestions.length) *
-        100
-    );
-
+  if (screen === "dashboard") {
     return (
       <div className="app">
-
         <nav className="navbar">
-
           <div className="logo">
-
             <span className="logo-icon">
               ✦
             </span>
-
             AceLearn AI
-
           </div>
 
           <div className="dashboard-status">
-
             <span className="status-dot" />
+            AI Agent Active
+          </div>
+        </nav>
 
-            Session Complete
+        <main className="dashboard-page">
+          <div className="dashboard-header">
+            <div>
+              <p className="eyebrow">
+                PERSONALIZED LEARNING
+              </p>
 
+              <h1>
+                Good to see you
+                {name
+                  ? `, ${name}`
+                  : ""}{" "}
+                👋
+              </h1>
+
+              <p>
+                Your AI learning profile is
+                updated from your latest
+                answers.
+              </p>
+            </div>
+
+            <div className="streak-card">
+              <span>
+                🔥
+              </span>
+
+              <div>
+                <strong>
+                  {progress.currentStreak}{" "}
+                  question streak
+                </strong>
+
+                <small>
+                  Best:{" "}
+                  {progress.bestStreak}
+                </small>
+              </div>
+            </div>
           </div>
 
+          <section className="agent-decision">
+            <div className="agent-avatar large">
+              ✦
+            </div>
+
+            <div className="decision-content">
+              <div className="decision-title">
+                <span>
+                  AI AGENT STATUS
+                </span>
+              </div>
+
+              <h2>
+                Your learning profile
+                is adapting.
+              </h2>
+
+              <p>
+                Accuracy:{" "}
+                {Math.round(
+                  progress.accuracy
+                )}
+                % • Skill:{" "}
+                {progress.skillLevel} •
+                Next difficulty:{" "}
+                {
+                  progress.currentDifficulty
+                }
+              </p>
+
+              <div className="decision-tags">
+                <span>
+                  🎯 Adaptive
+                </span>
+
+                <span>
+                  📈 Progress tracked
+                </span>
+
+                <span>
+                  🧠 AI personalized
+                </span>
+              </div>
+            </div>
+          </section>
+
+          <div className="dashboard-grid">
+            <section className="dashboard-card">
+              <div className="card-heading">
+                <div>
+                  <small>
+                    PERFORMANCE
+                  </small>
+
+                  <h2>
+                    Your progress
+                  </h2>
+                </div>
+              </div>
+
+              <div className="dashboard-skill">
+                <div>
+                  <span>
+                    Accuracy
+                  </span>
+
+                  <strong>
+                    {Math.round(
+                      progress.accuracy
+                    )}
+                    %
+                  </strong>
+                </div>
+
+                <div className="dashboard-progress">
+                  <span
+                    style={{
+                      width: `${Math.min(
+                        100,
+                        Math.max(
+                          0,
+                          progress.accuracy
+                        )
+                      )}%`,
+                    }}
+                  />
+                </div>
+
+                <small>
+                  {progress.correctAnswers}{" "}
+                  correct out of{" "}
+                  {progress.totalAttempts}
+                </small>
+              </div>
+
+              <div className="dashboard-skill">
+                <div>
+                  <span>
+                    Skill Level
+                  </span>
+
+                  <strong>
+                    {progress.skillLevel}
+                  </strong>
+                </div>
+              </div>
+
+              <div className="dashboard-skill">
+                <div>
+                  <span>
+                    Next Difficulty
+                  </span>
+
+                  <strong>
+                    {
+                      progress.currentDifficulty
+                    }
+                  </strong>
+                </div>
+              </div>
+            </section>
+
+            <section className="dashboard-card">
+              <div className="card-heading">
+                <div>
+                  <small>
+                    CURRENT PRACTICE
+                  </small>
+
+                  <h2>
+                    {topic}
+                  </h2>
+                </div>
+              </div>
+
+              <p>
+                {subject} • {level}
+              </p>
+
+              <button
+                className="primary-btn"
+                onClick={startSession}
+              >
+                Start Practice →
+              </button>
+
+              <button
+                className="secondary-btn"
+                onClick={openChat}
+              >
+                Ask AI
+              </button>
+            </section>
+          </div>
+
+          <section className="dashboard-card next-action">
+            <div className="next-icon">
+              ✦
+            </div>
+
+            <div>
+              <small>
+                NEXT ACTION
+              </small>
+
+              <h3>
+                Continue your adaptive
+                practice
+              </h3>
+
+              <p>
+                AceLearn will generate a
+                fresh question based on
+                your current level.
+              </p>
+            </div>
+
+            <button
+              className="secondary-btn"
+              onClick={startSession}
+            >
+              Continue
+            </button>
+          </section>
+        </main>
+      </div>
+    );
+  }
+
+  // =========================================================
+  // ASSESSMENT
+  // =========================================================
+
+  if (screen === "assessment") {
+    return (
+      <div className="app">
+        <nav className="navbar">
+          <div className="logo">
+            <span className="logo-icon">
+              ✦
+            </span>
+            AceLearn AI
+          </div>
+        </nav>
+
+        <main className="analysis-page">
+          <div className="analysis-icon">
+            ✦
+          </div>
+
+          <p className="eyebrow">
+            AI ASSESSMENT
+          </p>
+
+          <h1>
+            Assessment is now
+            <br />
+            <span>
+              AI generated.
+            </span>
+          </h1>
+
+          <p className="analysis-description">
+            Instead of using the old fixed
+            questions, AceLearn now generates
+            fresh questions through the backend.
+          </p>
+
+          <div className="agent-plan">
+            <div className="agent-avatar">
+              ✦
+            </div>
+
+            <div>
+              <small>
+                SELECTED CONFIGURATION
+              </small>
+
+              <h3>
+                {level} • {subject}
+              </h3>
+
+              <p>
+                Topic: {topic}
+                <br />
+                Difficulty: {difficulty}
+                <br />
+                Study time: {studyTime}
+              </p>
+            </div>
+          </div>
+
+          <button
+            className="primary-btn analysis-button"
+            onClick={startSession}
+          >
+            Start AI Generated Practice →
+          </button>
+
+          <button
+            className="secondary-btn"
+            onClick={openChat}
+          >
+            Ask AI First
+          </button>
+        </main>
+      </div>
+    );
+  }
+
+  // =========================================================
+  // RESULTS
+  // =========================================================
+
+  if (screen === "results") {
+    const percentage =
+      sessionTotal === 0
+        ? 0
+        : Math.round(
+            (sessionScore /
+              sessionTotal) *
+              100
+          );
+
+    return (
+      <div className="app">
+        <nav className="navbar">
+          <div className="logo">
+            <span className="logo-icon">
+              ✦
+            </span>
+            AceLearn AI
+          </div>
+
+          <div className="dashboard-status">
+            <span className="status-dot" />
+            Session Complete
+          </div>
         </nav>
 
         <main className="results-page">
-
           <div className="results-icon">
             ✓
           </div>
@@ -2589,23 +2054,19 @@ AI decision: ${agent.agentDecision}`,
           </p>
 
           <h1>
-            Great work
+            Practice complete
             {name
               ? `, ${name}`
-              : ""}! 🎉
+              : ""}!
           </h1>
 
           <p className="results-description">
-
-            Your AI Agent analyzed your performance
-            and updated your learning strategy.
-
+            Your answers were analyzed and
+            saved to your learning profile.
           </p>
 
           <div className="result-score-card">
-
             <div className="result-score">
-
               <strong>
                 {percentage}%
               </strong>
@@ -2613,71 +2074,50 @@ AI decision: ${agent.agentDecision}`,
               <span>
                 Session Score
               </span>
-
             </div>
 
             <div>
-
               <h3>
-                Your Algebra performance
+                {sessionScore} correct
+                out of{" "}
+                {sessionTotal}
               </h3>
 
               <p>
-                Your AI Agent used your answers to
-                adjust difficulty and determine
-                what you should practice next.
+                Current overall accuracy:{" "}
+                {Math.round(
+                  progress.accuracy
+                )}
+                %
               </p>
-
             </div>
-
           </div>
 
-          <div className="agent-result">
+          {agentResponse && (
+            <div className="agent-result">
+              <div className="agent-avatar">
+                ✦
+              </div>
 
-            <div className="agent-avatar">
-              ✦
+              <div>
+                <small>
+                  AI AGENT UPDATE
+                </small>
+
+                <h3>
+                  Your next step
+                </h3>
+
+                <p>
+                  {
+                    agentResponse.recommendation
+                  }
+                </p>
+              </div>
             </div>
-
-            <div>
-
-              <small>
-                AI AGENT UPDATE
-              </small>
-
-              <h3>
-                Your learning plan has been
-                updated.
-              </h3>
-
-              <p>
-                I've recorded today's performance.
-                I'll use it to decide which topics
-                and difficulty levels you should
-                practice next.
-              </p>
-
-              {agentResponse && (
-
-                <div className="agent-recommendation">
-
-                  <strong>
-                    🎯 Next recommendation
-                  </strong>
-
-                  <p>
-                    {agentResponse.recommendation}
-                  </p>
-
-                </div>
-
-              )}
-
-            </div>
-
-          </div>
+          )}
 
           <div className="result-actions">
-
             <button
               className="primary-btn"
               onClick={startSession}
@@ -2691,13 +2131,17 @@ AI decision: ${agent.agentDecision}`,
                 setScreen("dashboard")
               }
             >
-              Back to Dashboard
+              Dashboard
             </button>
 
+            <button
+              className="secondary-btn"
+              onClick={openChat}
+            >
+              Ask AI
+            </button>
           </div>
-
         </main>
-
       </div>
     );
   }
