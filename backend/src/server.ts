@@ -1,4 +1,3 @@
-```typescript
 import Fastify, {
   type FastifyInstance,
   type FastifyReply,
@@ -12,7 +11,7 @@ import db, { saveStudentProgress } from "./database";
 dotenv.config();
 
 // ==================================================
-// APP CONFIG
+// APP
 // ==================================================
 
 const app: FastifyInstance = Fastify({
@@ -24,9 +23,7 @@ const port = Number(process.env.PORT || 3001);
 const apiKey = process.env.GROQ_API_KEY;
 
 if (!apiKey) {
-  console.error(
-    "❌ GROQ_API_KEY is missing in backend/.env",
-  );
+  console.error("❌ GROQ_API_KEY is missing in backend/.env");
   process.exit(1);
 }
 
@@ -37,6 +34,14 @@ const groq = new Groq({
 // ==================================================
 // TYPES
 // ==================================================
+
+type Difficulty = "easy" | "medium" | "hard";
+
+type SkillLevel =
+  | "beginner"
+  | "developing"
+  | "proficient"
+  | "advanced";
 
 type Student = {
   id: string;
@@ -86,10 +91,10 @@ type GeneratedQuestion = {
   options: string[];
   correctAnswer: string;
   explanation: string;
-  subject?: string;
-  level?: string;
-  topic?: string;
-  difficulty?: string;
+  subject: string;
+  level: string;
+  topic: string;
+  difficulty: string;
 };
 
 type AgentResult = {
@@ -110,33 +115,43 @@ type AgentResult = {
   };
 };
 
-type GenerateQuestionResponse = {
-  question?: string;
-  options?: unknown;
-  correctAnswer?: string;
-  explanation?: string;
-  subject?: string;
-  level?: string;
-  topic?: string;
-  difficulty?: string;
-};
-
-type ChatMessageResponse = {
-  content?: string | null;
-};
-
 // ==================================================
 // HELPERS
 // ==================================================
 
-function safeJsonParse<T>(
-  value: string,
-): T | null {
+function safeJsonParse<T>(value: string): T | null {
   try {
     return JSON.parse(value) as T;
   } catch {
     return null;
   }
+}
+
+function getString(
+  value: unknown,
+  fallback = "",
+): string {
+  return typeof value === "string"
+    ? value.trim()
+    : fallback;
+}
+
+function getStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.filter(
+    (item): item is string =>
+      typeof item === "string",
+  );
+}
+
+function normalizeAnswer(value: string): string {
+  return value
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLowerCase();
 }
 
 function calculateAccuracy(
@@ -152,18 +167,9 @@ function calculateAccuracy(
   );
 }
 
-function normalizeAnswer(
-  value: string,
-): string {
-  return value
-    .trim()
-    .replace(/\s+/g, " ")
-    .toLowerCase();
-}
-
 function isDifficulty(
   value: string,
-): value is "easy" | "medium" | "hard" {
+): value is Difficulty {
   return (
     value === "easy" ||
     value === "medium" ||
@@ -173,11 +179,7 @@ function isDifficulty(
 
 function isSkillLevel(
   value: string,
-): value is
-  | "beginner"
-  | "developing"
-  | "proficient"
-  | "advanced" {
+): value is SkillLevel {
   return (
     value === "beginner" ||
     value === "developing" ||
@@ -189,25 +191,35 @@ function isSkillLevel(
 function getFallbackDifficulty(
   currentDifficulty: string,
   isCorrect: boolean,
-): "easy" | "medium" | "hard" {
-  const current = isDifficulty(currentDifficulty)
+): Difficulty {
+  const current: Difficulty = isDifficulty(
+    currentDifficulty,
+  )
     ? currentDifficulty
     : "easy";
 
   if (!isCorrect) {
-    if (current === "hard") return "medium";
+    if (current === "hard") {
+      return "medium";
+    }
+
     return "easy";
   }
 
-  if (current === "easy") return "medium";
-  if (current === "medium") return "hard";
+  if (current === "easy") {
+    return "medium";
+  }
+
+  if (current === "medium") {
+    return "hard";
+  }
 
   return "hard";
 }
 
 function getFallbackSkillLevel(
   accuracy: number,
-): "beginner" | "developing" | "proficient" | "advanced" {
+): SkillLevel {
   if (accuracy >= 85) {
     return "advanced";
   }
@@ -221,28 +233,6 @@ function getFallbackSkillLevel(
   }
 
   return "beginner";
-}
-
-function getString(
-  value: unknown,
-  fallback = "",
-): string {
-  return typeof value === "string"
-    ? value.trim()
-    : fallback;
-}
-
-function getStringArray(
-  value: unknown,
-): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-
-  return value.filter(
-    (item): item is string =>
-      typeof item === "string",
-  );
 }
 
 // ==================================================
@@ -344,13 +334,13 @@ async function startServer(): Promise<void> {
               : "No previous questions.";
 
           // ------------------------------------------
-          // Generate prompt
+          // AI prompt
           // ------------------------------------------
 
           const prompt = `
-You are AceLearn AI, an expert educational question generator.
+You are AceLearn AI, a highly careful educational question generator.
 
-Generate ONE high-quality question.
+Generate ONE high-quality multiple-choice question.
 
 Subject:
 ${subject}
@@ -364,26 +354,26 @@ ${topic}
 Difficulty:
 ${difficulty}
 
-Student ID:
+Student:
 ${studentId}
 
 Previously asked questions:
 ${previousQuestionText}
 
-IMPORTANT:
+STRICT RULES:
 
 1. Generate a genuinely NEW question.
-2. Do NOT repeat or slightly rewrite a previous question.
-3. Exactly ONE option must be correct.
-4. Return exactly FOUR options.
-5. The correct answer MUST exactly match one option.
-6. Verify the answer before returning it.
-7. Verify all mathematical calculations.
-8. Verify scientific facts.
-9. The explanation must prove the correct answer.
-10. Match the requested difficulty.
-11. Do not invent formulas or facts.
-12. Do not use ambiguous wording.
+2. Do NOT repeat any previous question.
+3. Do NOT make a trivial rewrite of a previous question.
+4. Exactly FOUR options.
+5. Exactly ONE option must be correct.
+6. correctAnswer MUST exactly match one option.
+7. Verify the answer before returning.
+8. Verify every mathematical calculation.
+9. Verify every scientific fact.
+10. Explanation must prove the answer.
+11. Avoid ambiguous wording.
+12. Match the requested difficulty.
 13. Return ONLY valid JSON.
 
 Return exactly:
@@ -414,7 +404,7 @@ Return exactly:
                 {
                   role: "system",
                   content:
-                    "You are a highly careful educational question generator. Verify every answer before returning JSON.",
+                    "You are an extremely careful educational question generator. Accuracy is more important than creativity. Return only valid JSON.",
                 },
                 {
                   role: "user",
@@ -428,24 +418,23 @@ Return exactly:
             });
 
           const content =
-            completion.choices[0]?.message
-              ?.content;
+            completion.choices[0]?.message?.content;
 
           if (typeof content !== "string") {
-            return reply.code(500).send({
+            return reply.code(502).send({
               success: false,
               error:
                 "AI returned an empty question.",
             });
           }
 
-          const rawQuestion =
-            safeJsonParse<GenerateQuestionResponse>(
+          const raw =
+            safeJsonParse<Partial<GeneratedQuestion>>(
               content,
             );
 
-          if (!rawQuestion) {
-            return reply.code(500).send({
+          if (!raw) {
+            return reply.code(502).send({
               success: false,
               error:
                 "AI returned invalid JSON.",
@@ -453,20 +442,16 @@ Return exactly:
           }
 
           const questionText =
-            getString(rawQuestion.question);
+            getString(raw.question);
 
           const options =
-            getStringArray(rawQuestion.options);
+            getStringArray(raw.options);
 
           const correctAnswer =
-            getString(
-              rawQuestion.correctAnswer,
-            );
+            getString(raw.correctAnswer);
 
           const explanation =
-            getString(
-              rawQuestion.explanation,
-            );
+            getString(raw.explanation);
 
           if (
             !questionText ||
@@ -474,37 +459,44 @@ Return exactly:
             !correctAnswer ||
             !explanation
           ) {
-            return reply.code(500).send({
+            return reply.code(502).send({
               success: false,
               error:
-                "AI generated an invalid question structure.",
+                "AI generated an invalid question.",
             });
           }
+
+          // ------------------------------------------
+          // Duplicate options check
+          // ------------------------------------------
 
           const uniqueOptions = new Set(
             options.map(normalizeAnswer),
           );
 
           if (uniqueOptions.size !== 4) {
-            return reply.code(500).send({
+            return reply.code(502).send({
               success: false,
               error:
                 "AI generated duplicate options.",
             });
           }
 
-          const correctExists =
-            options.some(
-              (option) =>
-                normalizeAnswer(option) ===
-                normalizeAnswer(correctAnswer),
-            );
+          // ------------------------------------------
+          // Correct answer check
+          // ------------------------------------------
+
+          const correctExists = options.some(
+            (option) =>
+              normalizeAnswer(option) ===
+              normalizeAnswer(correctAnswer),
+          );
 
           if (!correctExists) {
-            return reply.code(500).send({
+            return reply.code(502).send({
               success: false,
               error:
-                "AI generated a correct answer that does not match the options.",
+                "Correct answer does not match any option.",
             });
           }
 
@@ -514,21 +506,17 @@ Return exactly:
             correctAnswer,
             explanation,
             subject:
-              getString(
-                rawQuestion.subject,
-              ) || subject,
+              getString(raw.subject) ||
+              subject,
             level:
-              getString(
-                rawQuestion.level,
-              ) || level,
+              getString(raw.level) ||
+              level,
             topic:
-              getString(
-                rawQuestion.topic,
-              ) || topic,
+              getString(raw.topic) ||
+              topic,
             difficulty:
-              getString(
-                rawQuestion.difficulty,
-              ) || difficulty,
+              getString(raw.difficulty) ||
+              difficulty,
           };
 
           return {
@@ -541,7 +529,7 @@ Return exactly:
             error,
           );
 
-          return reply.code(500).send({
+          return reply.code(502).send({
             success: false,
             error:
               "Failed to generate question. Please try again.",
@@ -551,7 +539,7 @@ Return exactly:
     );
 
     // ==================================================
-    // ANALYZE STUDENT ANSWER
+    // ANALYZE ANSWER
     // ==================================================
 
     app.post(
@@ -589,7 +577,7 @@ Return exactly:
             "easy";
 
           // ------------------------------------------
-          // Previous student progress
+          // Previous progress
           // ------------------------------------------
 
           const previousStudent =
@@ -618,21 +606,36 @@ Return exactly:
             body.previousPerformance?.trim() ||
             (previousStudent
               ? `
-Previous saved progress:
+Previous student progress:
 
-Total attempts: ${previousStudent.total_attempts}
-Correct answers: ${previousStudent.correct_answers}
-Accuracy: ${previousStudent.accuracy}%
-Current streak: ${previousStudent.current_streak}
-Best streak: ${previousStudent.best_streak}
-Skill level: ${previousStudent.skill_level}
-Current difficulty: ${previousStudent.current_difficulty}
-Last recommendation: ${previousStudent.last_recommendation}
+Total attempts:
+${previousStudent.total_attempts}
+
+Correct answers:
+${previousStudent.correct_answers}
+
+Accuracy:
+${previousStudent.accuracy}%
+
+Current streak:
+${previousStudent.current_streak}
+
+Best streak:
+${previousStudent.best_streak}
+
+Skill level:
+${previousStudent.skill_level}
+
+Current difficulty:
+${previousStudent.current_difficulty}
+
+Last recommendation:
+${previousStudent.last_recommendation}
 `
               : "No previous performance available.");
 
           // ------------------------------------------
-          // Determine correctness ourselves
+          // Backend decides correctness
           // ------------------------------------------
 
           const isCorrect =
@@ -644,24 +647,20 @@ Last recommendation: ${previousStudent.last_recommendation}
             );
 
           // ------------------------------------------
-          // Previous values
+          // Progress calculation
           // ------------------------------------------
 
           const previousAttempts =
-            previousStudent?.total_attempts ||
-            0;
+            previousStudent?.total_attempts || 0;
 
           const previousCorrect =
-            previousStudent?.correct_answers ||
-            0;
+            previousStudent?.correct_answers || 0;
 
           const previousStreak =
-            previousStudent?.current_streak ||
-            0;
+            previousStudent?.current_streak || 0;
 
           const previousBestStreak =
-            previousStudent?.best_streak ||
-            0;
+            previousStudent?.best_streak || 0;
 
           const totalAttempts =
             previousAttempts + 1;
@@ -694,7 +693,7 @@ Last recommendation: ${previousStudent.last_recommendation}
           const prompt = `
 You are AceLearn AI, an adaptive educational tutor.
 
-Analyze this student's answer.
+Analyze the student's answer.
 
 Student:
 ${studentId}
@@ -720,36 +719,37 @@ ${body.studentAnswer}
 Previous performance:
 ${previousPerformance}
 
-The backend has already determined correctness as:
+BACKEND CORRECTNESS:
 ${isCorrect ? "CORRECT" : "INCORRECT"}
 
-IMPORTANT RULES:
+STRICT RULES:
 
-1. Do NOT change the supplied correct answer.
-2. Do NOT contradict the backend correctness result.
+1. NEVER change the supplied correct answer.
+2. NEVER contradict backend correctness.
 3. Explain the answer clearly.
-4. If incorrect, explain the exact mistake.
-5. Give the correct solution.
-6. Recommend targeted practice.
-7. Choose a sensible next difficulty.
-8. Do not invent facts.
-9. Be encouraging but honest.
-10. Return ONLY valid JSON.
+4. If incorrect, explain exactly why.
+5. Show the correct solution.
+6. Identify the likely mistake.
+7. Recommend targeted practice.
+8. Select a sensible next difficulty.
+9. Do not invent facts.
+10. Be encouraging but honest.
+11. Return ONLY valid JSON.
 
 Return:
 
 {
   "correct": ${isCorrect},
   "skillLevel": "beginner",
-  "feedback": "Clear student-friendly feedback.",
+  "feedback": "Student-friendly feedback",
   "correctAnswer": "${body.correctAnswer}",
-  "explanation": "Step-by-step correct solution.",
-  "mistake": "Likely mistake or empty string.",
+  "explanation": "Step-by-step solution",
+  "mistake": "Likely mistake",
   "nextDifficulty": "medium",
-  "recommendation": "What to practice next.",
-  "nextTopic": "Recommended topic.",
-  "agentDecision": "Why this decision was made.",
-  "action": "Concrete next action."
+  "recommendation": "What to practice next",
+  "nextTopic": "Recommended topic",
+  "agentDecision": "Why this decision was made",
+  "action": "Concrete next action"
 }
 
 Allowed skill levels:
@@ -782,11 +782,10 @@ easy, medium, hard
             });
 
           const content =
-            completion.choices[0]?.message
-              ?.content;
+            completion.choices[0]?.message?.content;
 
           if (typeof content !== "string") {
-            return reply.code(500).send({
+            return reply.code(502).send({
               success: false,
               error:
                 "AI returned an empty response.",
@@ -799,7 +798,7 @@ easy, medium, hard
             );
 
           if (!result) {
-            return reply.code(500).send({
+            return reply.code(502).send({
               success: false,
               error:
                 "AI returned invalid JSON.",
@@ -807,19 +806,17 @@ easy, medium, hard
           }
 
           // ------------------------------------------
-          // Difficulty
+          // Next difficulty
           // ------------------------------------------
 
-          const requestedNextDifficulty =
+          const aiDifficulty =
             getString(
               result.nextDifficulty,
             );
 
           const nextDifficulty =
-            isDifficulty(
-              requestedNextDifficulty,
-            )
-              ? requestedNextDifficulty
+            isDifficulty(aiDifficulty)
+              ? aiDifficulty
               : getFallbackDifficulty(
                   difficulty,
                   isCorrect,
@@ -829,14 +826,14 @@ easy, medium, hard
           // Skill level
           // ------------------------------------------
 
-          const requestedSkill =
+          const aiSkill =
             getString(
               result.skillLevel,
             );
 
           const skillLevel =
-            isSkillLevel(requestedSkill)
-              ? requestedSkill
+            isSkillLevel(aiSkill)
+              ? aiSkill
               : getFallbackSkillLevel(
                   accuracy,
                 );
@@ -978,10 +975,6 @@ easy, medium, hard
             );
           }
 
-          // ------------------------------------------
-          // Final response
-          // ------------------------------------------
-
           return {
             success: true,
 
@@ -1022,11 +1015,11 @@ easy, medium, hard
           };
         } catch (error) {
           console.error(
-            "❌ Agent error:",
+            "❌ Analyze error:",
             error,
           );
 
-          return reply.code(500).send({
+          return reply.code(502).send({
             success: false,
             error:
               "AI Agent failed to process the answer. Please try again.",
@@ -1161,15 +1154,13 @@ Treat this as a new learner.
 `;
 
           // ------------------------------------------
-          // Educational prompt
+          // Chat prompt
           // ------------------------------------------
 
           const prompt = `
 You are AceLearn AI, a highly reliable educational AI tutor.
 
-Your goal is to help students learn correctly, not merely to produce text.
-
-You can help with:
+You help students with:
 
 - Mathematics
 - Physics
@@ -1190,40 +1181,35 @@ You can help with:
 IMPORTANT ACCURACY RULES:
 
 1. Understand the student's actual question.
-2. Correct obvious spelling mistakes and typos mentally when the intended meaning is clear.
-3. Example: "vesper therom" may mean "VSEPR theory". If the intended meaning is uncertain, ask for clarification instead of guessing.
-4. Do NOT invent information.
-5. For mathematics, carefully calculate the answer before responding.
-6. For physics and chemistry, verify definitions, formulas and scientific facts.
-7. If the student's premise is incorrect, politely correct it.
-8. If the question is ambiguous, clearly state the ambiguity.
-9. If you genuinely cannot determine what the student means, ask one concise clarification question.
-10. Never claim that the backend, database, browser, file or internet did something unless it actually did.
-11. Do not say there is a connection problem unless an actual AI/API error occurred.
-12. Do not unnecessarily repeat the same question or answer.
-13. Use the student's level when explaining.
-14. Beginner questions should receive simple explanations.
-15. JEE questions should receive appropriate exam-level explanations.
-16. When solving a numerical problem, show the important calculation steps.
-17. When correcting a student, explain WHY the answer is wrong.
-18. Give a useful answer directly instead of unnecessary filler.
-19. Use headings, bullets, formulas and examples when they genuinely improve understanding.
-20. Never shame the student.
-21. If the student asks a simple definition, do not turn it into a huge lecture unless more detail is useful.
-22. If a student asks for a comparison, clearly compare the concepts.
-23. If the student asks for a formula, give the formula and explain the symbols.
-24. If a question requires information that is missing, ask for the missing information.
-25. Do not fabricate sources, citations or references.
+2. Correct obvious spelling mistakes mentally when the intended meaning is clear.
+3. Example: "vesper therom" may mean "VSEPR theory".
+4. If the intended meaning is genuinely unclear, ask for clarification.
+5. Never invent facts.
+6. Verify mathematics carefully.
+7. Verify physics and chemistry definitions and formulas.
+8. If the student's statement is wrong, politely correct it.
+9. Explain WHY something is correct.
+10. Do not claim a connection problem unless the API actually failed.
+11. Do not unnecessarily repeat previous answers.
+12. Use simple language for simple questions.
+13. Give step-by-step calculations for numerical problems.
+14. For JEE-level questions, give appropriate depth.
+15. Never shame the student.
+16. Accuracy is more important than sounding impressive.
+17. If the user asks a definition, answer directly first.
+18. If the user asks for an example, provide a relevant example.
+19. If the user asks a comparison, compare clearly.
+20. If information is missing, ask for it rather than guessing.
 
 ANSWER STYLE:
 
-- Simple and clear by default.
-- Accurate before impressive.
-- Concise for simple questions.
-- Detailed for difficult questions.
-- Step-by-step for problem solving.
-- Use examples when helpful.
-- Respect the student's requested language.
+- Clear
+- Student-friendly
+- Accurate
+- Concise for simple questions
+- Detailed for difficult questions
+- Step-by-step for problem solving
+- Use headings and bullets when useful
 
 ${studentContext}
 
@@ -1234,10 +1220,6 @@ ${message}
 Answer the student directly.
 `;
 
-          // ------------------------------------------
-          // Groq
-          // ------------------------------------------
-
           const completion =
             await groq.chat.completions.create({
               model: "openai/gpt-oss-20b",
@@ -1247,7 +1229,7 @@ Answer the student directly.
                 {
                   role: "system",
                   content:
-                    "You are AceLearn AI, a careful, accurate and student-friendly educational tutor. Accuracy is more important than sounding confident.",
+                    "You are AceLearn AI, a careful, accurate and student-friendly educational tutor. Accuracy is more important than confidence.",
                 },
                 {
                   role: "user",
@@ -1256,19 +1238,14 @@ Answer the student directly.
               ],
             });
 
-          const messageResponse =
-            completion.choices[0]
-              ?.message as
-              | ChatMessageResponse
-              | undefined;
-
           const answer =
-            typeof messageResponse?.content ===
-            "string"
-              ? messageResponse.content.trim()
-              : "";
+            completion.choices[0]?.message
+              ?.content;
 
-          if (!answer) {
+          if (
+            typeof answer !== "string" ||
+            !answer.trim()
+          ) {
             return reply.code(502).send({
               success: false,
               error:
@@ -1279,7 +1256,7 @@ Answer the student directly.
           return {
             success: true,
             studentId,
-            answer,
+            answer: answer.trim(),
           };
         } catch (error) {
           console.error(
@@ -1297,7 +1274,7 @@ Answer the student directly.
     );
 
     // ==================================================
-    // GET STUDENT PROGRESS
+    // STUDENT PROGRESS
     // ==================================================
 
     app.get(
@@ -1377,7 +1354,7 @@ Answer the student directly.
     );
 
     // ==================================================
-    // START SERVER
+    // START
     // ==================================================
 
     await app.listen({
@@ -1399,4 +1376,3 @@ Answer the student directly.
 }
 
 void startServer();
-
