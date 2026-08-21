@@ -1,17 +1,14 @@
 {
-  "name": "backend",
+  "name": "acelearn-backend",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "private": true,
+  "type": "commonjs",
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "build": "tsc",
-    "start": "node dist/server.js"
+    "start": "node dist/server.js",
+    "typecheck": "tsc --noEmit"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "packageManager": "pnpm@10.32.1",
   "dependencies": {
     "@fastify/cors": "^11.3.0",
     "better-sqlite3": "^13.0.3",
