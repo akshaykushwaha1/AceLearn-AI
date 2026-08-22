@@ -142,6 +142,17 @@ function normalizeQuestionText(value: string): string {
     .replace(/\s+/g, " ");
 }
 
+function shuffleOptions(options: string[]): string[] {
+  // AI models tend to always put the correct answer first. Shuffle here so
+  // the correct option lands on A/B/C/D at random, like a real exam.
+  const shuffled = [...options];
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+  }
+  return shuffled;
+}
+
 function calculateAccuracy(correctAnswers: number, totalAttempts: number): number {
   if (totalAttempts <= 0) {
     return 0;
@@ -350,7 +361,7 @@ Return exactly:
 
             result = {
               question: questionText,
-              options,
+              options: shuffleOptions(options),
               correctAnswer,
               explanation,
               subject: getString(raw.subject) || subject,
